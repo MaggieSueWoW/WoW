@@ -1,0 +1,7 @@
+*.log
+*.log.*
+*.csv
+*.h5
+configs
+backup
+.idea/
