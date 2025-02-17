@@ -46,4 +46,4 @@ wowaudit_sheet_key: 'xxxx'
 # License
 
 Code is licensed under the MIT license except as otherwise noted.
-See [LICENSE](https://github.com/MaggieSueWoW/WoW/WoWAudit/blob/master/LICENSE) for details.
+See [LICENSE](https://github.com/MaggieSueWoW/WoW/blob/master/WoWAudit/LICENSE) for details.
