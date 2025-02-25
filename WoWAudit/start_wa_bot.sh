@@ -25,4 +25,4 @@ docker run \
   -d \
   --restart=unless-stopped \
   $IMAGE_NAME \
-  ./wowaudit_bot.py --loop --config_file $CONFIG_FILE --expansion TWW --season S1
+  ./wowaudit_bot.py --loop --config_file $CONFIG_FILE --expansion TWW --season S2
