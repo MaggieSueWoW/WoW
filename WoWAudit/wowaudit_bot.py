@@ -152,16 +152,6 @@ def store_in_mongo(collection, data):
         logging.info("No new documents to insert.")
 
 
-def backfill_from_redis(redis_conn, redis_key_prefix, collection):
-    keys = redis_conn.keys(f"{redis_key_prefix}*")
-    logging.info(f"Found {len(keys)} keys to backfill")
-
-    for key in keys:
-        logging.info(f"Backfilling key {key}")
-        data = json.loads(redis_conn.get(key))
-        store_in_mongo(collection, data)
-
-
 def main():
     common.misc.setup_logging_and_temp(APP_NAME, "WoWAudit Bot", "wowaudit_bot")
     logging.info("ARGS: " + str(vars(ARGS)))
