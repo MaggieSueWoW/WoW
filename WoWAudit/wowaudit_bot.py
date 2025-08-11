@@ -132,7 +132,7 @@ def get_wowaudit_collection(db):
 
 def store_in_mongo(collection, data):
     docs = wowaudit_to_docs(data)
-    logging.info(f"Processing {len(docs)} docs from {docs[0]['timestamp']}")
+    logging.info(f"Processing {len(docs)} docs from {docs[0]['timestamp']} -- {docs[0]['metadata']}")
 
     bulk_inserts = []
     for doc in docs:
