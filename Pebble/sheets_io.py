@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import time
 from typing import Dict, List, Any, Tuple
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -138,6 +139,9 @@ def upsert_rows(ws, headers: List[str], new_dicts: List[Dict[str, Any]], key_fie
     if inserts:
         LOGGER.info("Appending %d rows to %s", len(inserts), ws.title)
         ws.append_rows(inserts, value_input_option="USER_ENTERED")
+
+    if updates_by_row or inserts:
+        time.sleep(0.200)  # mmmfixme: tmp
 
     return (len(inserts), len(updates_by_row))
 

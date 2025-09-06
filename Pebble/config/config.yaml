@@ -14,6 +14,10 @@ app:
     week_totals: "Week Totals"
     service_log: "Service Log"
     night_qa: "Night QA"
+    team_roster: "Team Roster"
+    availability_overrides: "Availability Overrides"
+    bench_night_totals: "Bench Night Totals"
+    bench_week_totals: "Bench Week Totals"
 
   raid_window:
     start_local: "19:00"
@@ -41,7 +45,7 @@ app:
   pacing:
     poll_seconds: 300
     max_reports_per_cycle: 5
-    sleep_between_requests_ms: 200
+    sleep_between_requests_ms: 1000
 
 wcl:
   client_id: "${WCL_CLIENT_ID}"

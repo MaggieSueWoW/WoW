@@ -452,6 +452,20 @@ def main():
             br = break_range_by_night.get(nid)
             meta = break_meta_by_night.get(nid, {"detection": "none", "candidates": [], "largest_gap_min": 0.0})
 
+            def secs_to_mins(td):
+                return td.total_seconds() / 60.0
+
+            pre_minutes = 0.0
+            post_minutes = 0.0
+            if night_start and night_end:
+                if br:
+                    pre_minutes = max(0.0, secs_to_mins(br[0] - night_start))
+                    post_minutes = max(0.0, secs_to_mins(night_end - br[1]))
+                else:
+                    # no break detected: treat all as "pre" for accounting symmetry
+                    pre_minutes = max(0.0, secs_to_mins(night_end - night_start))
+                    post_minutes = 0.0
+
             qa_rows.append({
                 "Night ID": nid,
                 "Reports Involved": ", ".join(reports_involved),
@@ -461,7 +475,9 @@ def main():
                 "Break Detection": meta["detection"],
                 "Break Start (PT)": br[0].isoformat(timespec="seconds") if br else "",
                 "Break End (PT)": br[1].isoformat(timespec="seconds") if br else "",
-                "Break Duration (min)": f"{round(minutes(br[1] - br[0]), 2) if br else 0.0}",
+                "Break Duration (min)": f"{round(secs_to_mins(br[1] - br[0]), 2) if br else 0.0}",
+                "Night Pre Duration (min)": f"{pre_minutes:.2f}",
+                "Night Post Duration (min)": f"{post_minutes:.2f}",
                 "Gap Window": f"{break_start_t.strftime('%H:%M')}–{break_end_t.strftime('%H:%M')} PT",
                 "Min Break Gap (min)": str(min_break_min),
                 "Max Break Gap (min)": str(max_break_min),
