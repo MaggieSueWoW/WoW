@@ -5,6 +5,7 @@ import time
 from typing import Dict, List, Any, Tuple
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from decimal import Decimal, InvalidOperation
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -119,7 +120,10 @@ def upsert_rows(ws, headers: List[str], new_dicts: List[Dict[str, Any]], key_fie
         if key in index:
             rownum = index[key]
             existing_row = existing_rows[rownum - 2]
-            if existing_row != new_row:
+            # Canonical equality: normalize both sides cell-by-cell
+            ex_norm = [_norm_cell(x) for x in existing_row]
+            new_norm = [_norm_cell(x) for x in new_row]
+            if ex_norm != new_norm:
                 updates_by_row[rownum] = new_row
         else:
             inserts.append(new_row)
@@ -158,3 +162,43 @@ def to_int(s: Any, default: int = 0) -> int:
         return int(s)
     except Exception:
         return default
+def _norm_number_or_keep(s: str) -> str:
+    """Normalize numeric strings; leave non-numerics untouched."""
+    txt = s.strip()
+    if txt == "":
+        return ""
+    try:
+        d = Decimal(txt)
+    except InvalidOperation:
+        return txt  # not a number → return as-is
+    d = d.normalize()
+    if d == 0:
+        return "0"
+    plain = format(d, "f").rstrip("0").rstrip(".")
+    return plain or "0"
+
+def _norm_bool_text(s: str) -> str:
+    """
+    Normalize only textual booleans (true/false/yes/no) to TRUE/FALSE.
+    Do NOT map '0'/'1' to booleans to avoid corrupting numeric columns.
+    """
+    low = s.strip().lower()
+    if low in ("true", "yes"):
+        return "TRUE"
+    if low in ("false", "no"):
+        return "FALSE"
+    return s.strip()
+
+def _norm_cell(v: str) -> str:
+    """Canonicalize a cell for equality checking: numbers first, then textual booleans."""
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if s == "":
+        return ""
+    # 1) try numeric normalization first
+    n = _norm_number_or_keep(s)
+    if n != s:
+        return n
+    # 2) then normalize textual booleans (no 0/1 mapping)
+    return _norm_bool_text(s)
