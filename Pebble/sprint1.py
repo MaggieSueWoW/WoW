@@ -4,6 +4,7 @@ import sys
 import json
 import yaml
 import logging
+import time
 from typing import Dict, Any, List
 
 from dotenv import load_dotenv
@@ -58,6 +59,20 @@ def main():
     ws_part = ws_by_name(ss, sheets_cfg["participation"])
     ws_service = ws_by_name(ss, sheets_cfg["service_log"])
 
+    sleep_ms = int(cfg["app"]["pacing"].get("sleep_between_requests_ms", 200))
+    # optional control switch (won't exist unless you add it to Control)
+    auto_mark_done = False
+
+    # try reading Control key (best-effort; ignore if absent)
+    try:
+        ws_control = ws_by_name(ss, sheets_cfg["control"])
+        c_headers, c_rows = read_all(ws_control)
+        ctrl = rows_to_dicts(c_headers, c_rows)
+        kv = {row["Key"]: (row.get("Value") or "") for row in ctrl if "Key" in row}
+        auto_mark_done = (kv.get("Auto Mark Done","").strip().lower() in ("true","t","yes","y","1"))
+    except Exception:
+        pass
+
     rep_headers, rep_rows = read_all(ws_reports)
     if not rep_headers:
         raise RuntimeError("Reports sheet is empty or missing headers.")
@@ -77,8 +92,7 @@ def main():
             continue
 
         url = r.get("Report URL", "")
-        code_in_cell = (r.get("Report Code") or "").strip()
-        code = extract_report_code(code_in_cell or url)
+        code = extract_report_code((r.get("Report Code") or url))
         if not code:
             continue
 
@@ -97,6 +111,29 @@ def main():
         actors = (rep.get("masterData") or {}).get("actors") or []
         guild = rep.get("guild", {})
         guild_name = guild.get("name") or ""
+
+        # build digests for change detection
+        fights_digest_list = [
+            {"id": int(f["id"]), "s": report_start + int(f["startTime"]), "e": report_start + int(f["endTime"])} for f
+            in fights]
+        computed_change_hash = stable_digest({"F": fights_digest_list, "P_count": sum(
+            1 for f in fights if int(f.get("difficulty") or 0) == 5 and int(f.get("encounterID") or 0) > 0)})
+
+        # If Last Change Hash matches and we already have Report Code set, skip all writes for this row
+        existing_lch = (r.get("Last Change Hash") or "").strip()
+        if existing_lch and existing_lch == computed_change_hash:
+            # Optionally auto-mark done if report_end > 0 and the switch is on
+            if auto_mark_done and report_end and status != "done":
+                r2 = dict(r);
+                r2["Status"] = "done"
+                write_back_reports_row(ws_reports, rep_headers, r, r2)  # safe update for status only
+                log(ws_service, tz, code, r.get("Raid Night ID (override)", ""), "STAGE",
+                    "No changes; auto-marked done.")
+            else:
+                log(ws_service, tz, code, r.get("Raid Night ID (override)", ""), "STAGE", "No changes; skipped writes.")
+            if sleep_ms > 0:
+                time.sleep(sleep_ms / 1000.0)
+            continue
 
         # Build actor map
         actor_map = {int(a["id"]): a for a in actors}
@@ -192,12 +229,18 @@ def main():
             "Last Processed Fight Index": str(max([int(f["id"]) for f in fights], default=0)),
             "Digest": stable_digest(fights_digest_list),
             "Last Checked (PT)": now_pt_iso(tz),
-            "Last Change Hash": stable_digest({"F": fights_digest_list, "P_count": len(part_rows)}),
+            "Last Change Hash": computed_change_hash,
         }
+        # Optional auto-mark done
+        if auto_mark_done and report_end:
+            reports_updates["Status"] = "done"
 
         write_back_reports_row(ws_reports, rep_headers, r, reports_updates)
         log(ws_service, tz, code, r.get("Raid Night ID (override)", ""), "STAGE",
-            f"Fights +{ins_f}/{upd_f}, Participation +{ins_p}/{upd_p}")
+            f"Updated report cache; wrote Fights/Participation diffs.")
+
+        if sleep_ms > 0:
+            time.sleep(sleep_ms / 1000.0)
 
         processed += 1
 

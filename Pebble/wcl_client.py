@@ -1,9 +1,12 @@
+# wcl_client.py
 import re
 import json
 import hashlib
 import logging
 from typing import Dict, Any
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 WCL_OAUTH_URL = "https://www.warcraftlogs.com/oauth/token"
 WCL_API_URL = "https://www.warcraftlogs.com/api/v2/client"
@@ -19,29 +22,27 @@ query ReportFightsAndActors($code: String!, $translate: Boolean = true) {
       endTime
       region { id name compactName }
       guild { id name server { name region { id name compactName } } }
-      fights {
-        id
-        encounterID
-        name
-        difficulty
-        startTime
-        endTime
-        friendlyPlayers
-        kill
-      }
-      masterData(translate: $translate) {
-        actors(type: "Player") {
-          id
-          name
-          server
-          subType
-          type
-        }
-      }
+      fights { id encounterID name difficulty startTime endTime friendlyPlayers kill }
+      masterData(translate: $translate) { actors(type: "Player") { id name server subType type } }
     }
   }
 }
 """
+
+def _session() -> requests.Session:
+    s = requests.Session()
+    retry = Retry(
+        total=5,
+        backoff_factor=0.5,              # 0.5, 1.0, 2.0, ...
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset({"GET","POST"}),
+        raise_on_status=False,           # we’ll still resp.raise_for_status() ourselves
+    )
+    s.mount("https://", HTTPAdapter(max_retries=retry))
+    s.mount("http://",  HTTPAdapter(max_retries=retry))
+    return s
+
+_SES = _session()
 
 def extract_report_code(url_or_code: str) -> str:
     if not url_or_code:
@@ -51,11 +52,11 @@ def extract_report_code(url_or_code: str) -> str:
 
 def get_token(client_id: str, client_secret: str) -> str:
     LOGGER.info("Requesting Warcraft Logs OAuth token…")
-    resp = requests.post(
+    resp = _SES.post(
         WCL_OAUTH_URL,
         data={"grant_type": "client_credentials"},
         auth=(client_id, client_secret),
-        timeout=30
+        timeout=30,
     )
     resp.raise_for_status()
     tok = resp.json()["access_token"]
@@ -64,11 +65,11 @@ def get_token(client_id: str, client_secret: str) -> str:
 
 def gql(token: str, query: str, variables: Dict[str, Any]) -> Dict[str, Any]:
     LOGGER.info("GraphQL request → %s vars=%s", WCL_API_URL, variables)
-    resp = requests.post(
+    resp = _SES.post(
         WCL_API_URL,
         json={"query": query, "variables": variables},
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-        timeout=60
+        timeout=60,
     )
     resp.raise_for_status()
     data = resp.json()

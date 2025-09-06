@@ -13,6 +13,7 @@ app:
     night_totals: "Night Totals"
     week_totals: "Week Totals"
     service_log: "Service Log"
+    night_qa: "Night QA"
 
   raid_window:
     start_local: "19:00"

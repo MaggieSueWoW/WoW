@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+from math import floor
 import yaml
 import logging
 from dataclasses import dataclass
@@ -22,6 +23,18 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 LOG = logging.getLogger("sprint2")
+
+# helper to format a compact fight timeline like "19:12 Gnarlroot | 19:28 Igira | …"
+def format_timeline(fs: List["Fight"]) -> str:
+    items = []
+    for f in sorted(fs, key=lambda x: x.start_ms):
+        t = f.start_pt.strftime("%H:%M")
+        name = f.name or f"Boss {f.encounter_id}"
+        items.append(f"{t} {name}")
+    return " | ".join(items)
+
+def minutes(td) -> float:
+    return td.total_seconds() / 60.0
 
 @dataclass(frozen=True)
 class Fight:
@@ -103,6 +116,7 @@ def main():
     ws_blocks  = ws_by_name(ss, sheets_cfg["blocks"])
     ws_ntotals = ws_by_name(ss, sheets_cfg["night_totals"])
     ws_service = ws_by_name(ss, sheets_cfg["service_log"])
+    ws_qa      = ws_by_name(ss, sheets_cfg["night_qa"])
 
     # --- Load Reports (for manual Night ID overrides, etc.)
     rep_headers, rep_rows = read_all(ws_reports)
@@ -242,12 +256,21 @@ def main():
         nights.setdefault(nid, []).append(f)
 
     break_range_by_night: Dict[str, Optional[Tuple[datetime, datetime]]] = {}
+    break_meta_by_night: Dict[str, Dict[str, Any]] = {}  # for QA: detection mode, candidates, largest gap, etc.
+
     for nid, fs in nights.items():
         if not fs:
             break_range_by_night[nid] = None
+            break_meta_by_night[nid] = {
+                "detection": "none",
+                "candidates": [],
+                "largest_gap_min": 0.0,
+            }
             continue
+
         fs = sorted(fs, key=lambda x: x.start_ms)
-        # manual override if any report for this night provided explicit break
+
+        # manual override if any report in the night provided explicit break
         manual = None
         for f in fs:
             mbs, mbe = manual_breaks.get(f.report_code, (None, None))
@@ -256,25 +279,50 @@ def main():
                 break
         if manual:
             break_range_by_night[nid] = manual
+            break_meta_by_night[nid] = {
+                "detection": "manual",
+                "candidates": [],
+                "largest_gap_min": minutes(manual[1] - manual[0]),
+            }
             continue
 
-        # auto: find max gap inside [break_start_t, break_end_t] window with min/max duration
-        best = None
-        best_len = timedelta(0)
+        # auto: gather all viable gaps
+        candidates: List[Tuple[datetime, datetime, float]] = []
         for prev, nxt in zip(fs, fs[1:]):
             gap_start = prev.end_pt
             gap_end = nxt.start_pt
             gap = gap_end - gap_start
             if gap < timedelta(minutes=min_break_min) or gap > timedelta(minutes=max_break_min):
                 continue
-            # midpoint inside window?
-            mid = gap_start + gap/2
+            mid = gap_start + gap / 2
             if not within_window(mid, break_start_t, break_end_t):
                 continue
-            if gap > best_len:
-                best = (gap_start, gap_end)
-                best_len = gap
-        break_range_by_night[nid] = best
+            candidates.append((gap_start, gap_end, minutes(gap)))
+
+        # choose the largest
+        if candidates:
+            best = max(candidates, key=lambda x: x[2])
+            break_range_by_night[nid] = (best[0], best[1])
+            # keep only the top 5 candidates for QA readability
+            top5 = sorted(candidates, key=lambda x: x[2], reverse=True)[:5]
+            break_meta_by_night[nid] = {
+                "detection": "auto",
+                "candidates": [
+                    {
+                        "start": top[0].isoformat(timespec="seconds"),
+                        "end": top[1].isoformat(timespec="seconds"),
+                        "minutes": round(top[2], 2),
+                    } for top in top5
+                ],
+                "largest_gap_min": round(best[2], 2),
+            }
+        else:
+            break_range_by_night[nid] = None
+            break_meta_by_night[nid] = {
+                "detection": "none",
+                "candidates": [],
+                "largest_gap_min": 0.0,
+            }
 
     # --- Build contiguous Blocks per Night/Main
     # We use boss fights timeline for "contiguous"; time credited is from first boss start to last boss end, minus any break overlap.
@@ -393,6 +441,43 @@ def main():
     )
     LOG.info("Blocks upserts: +%d / updated %d", ins_b, upd_b)
 
+    # --- QA sheet
+    qa_rows: List[Dict[str, Any]] = []
+    if ws_qa is not None:
+        for nid, fs in nights.items():
+            fs_sorted = sorted(fs, key=lambda x: x.start_ms)
+            reports_involved = sorted({f.report_code for f in fs_sorted})
+            night_start = fs_sorted[0].start_pt if fs_sorted else None
+            night_end = fs_sorted[-1].end_pt if fs_sorted else None
+            br = break_range_by_night.get(nid)
+            meta = break_meta_by_night.get(nid, {"detection": "none", "candidates": [], "largest_gap_min": 0.0})
+
+            qa_rows.append({
+                "Night ID": nid,
+                "Reports Involved": ", ".join(reports_involved),
+                "Mythic Boss Fights": str(len(fs_sorted)),
+                "Night Start (PT)": night_start.isoformat(timespec="seconds") if night_start else "",
+                "Night End (PT)": night_end.isoformat(timespec="seconds") if night_end else "",
+                "Break Detection": meta["detection"],
+                "Break Start (PT)": br[0].isoformat(timespec="seconds") if br else "",
+                "Break End (PT)": br[1].isoformat(timespec="seconds") if br else "",
+                "Break Duration (min)": f"{round(minutes(br[1] - br[0]), 2) if br else 0.0}",
+                "Gap Window": f"{break_start_t.strftime('%H:%M')}–{break_end_t.strftime('%H:%M')} PT",
+                "Min Break Gap (min)": str(min_break_min),
+                "Max Break Gap (min)": str(max_break_min),
+                "Dedupe Tolerance (sec)": str(dedupe_tol_s),
+                "Largest Gap (min)": f"{meta['largest_gap_min']:.2f}",
+                "Candidate Gaps (JSON)": json.dumps(meta.get("candidates", [])),
+                "Fight Timeline (compact)": format_timeline(fs_sorted),
+                "Notes": "",
+            })
+
+        qa_headers, _ = read_all(ws_qa)
+        if not qa_headers:
+            raise RuntimeError("Night QA sheet missing headers. Paste them first.")
+        ins_q, upd_q = upsert_rows(ws_qa, qa_headers, qa_rows, ["Night ID"])
+        LOG.info("Night QA upserts: +%d / updated %d", ins_q, upd_q)
+
     # --- Night Totals ---
     nt_rows: List[Dict[str, Any]] = []
     for (nid, main), acc in ntotals_acc.items():
@@ -418,7 +503,7 @@ def main():
     LOG.info("Night Totals upserts: +%d / updated %d", ins_n, upd_n)
 
     # Log success
-    log(ws_service, tz, "", "", "BLOCKS", f"Blocks +{ins_b}/{upd_b}; NightTotals +{ins_n}/{upd_n}")
+    log(ws_service, tz, "", "", "BLOCKS", f"Blocks +{ins_b}/{upd_b}; NightTotals +{ins_n}/{upd_n}" + (f"; QA +{ins_q}/{upd_q}" if ws_qa is not None else ""))
 
 def log(ws_service, tz: str, report_code: str, night_id: str, stage: str, message: str, details: Dict[str, Any] | None = None):
     headers, _ = read_all(ws_service)
