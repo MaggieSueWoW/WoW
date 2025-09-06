@@ -1,0 +1,52 @@
+app:
+  timezone: "America/Los_Angeles"
+  sheet_id: "1wNK8ZlX5grecCCeryNUB35Adn5lqlxgF-EwsGPF-W5s"
+
+  sheets:
+    reports: "Reports"
+    control: "Control"
+    roster_map: "Roster Map"
+    player_facts: "Player Facts"
+    fights: "Fights"
+    participation: "Participation"
+    blocks: "Blocks"
+    night_totals: "Night Totals"
+    week_totals: "Week Totals"
+    service_log: "Service Log"
+
+  raid_window:
+    start_local: "19:00"
+    end_local: "23:30"
+
+  break_window:
+    start_local: "20:50"
+    end_local: "21:30"
+    min_gap_minutes: 8
+    max_gap_minutes: 30
+
+  defaults:
+    mythic_only: true
+    include_trash: true
+
+  week_reset:
+    day_of_week: "Tuesday"
+    time_local: "07:00"
+
+  dedupe:
+    overlap_merge_tolerance_sec: 3
+
+  inactivity_timeout_minutes: 35
+
+  pacing:
+    poll_seconds: 300
+    max_reports_per_cycle: 5
+    sleep_between_requests_ms: 200
+
+wcl:
+  client_id: "${WCL_CLIENT_ID}"
+  client_secret: "${WCL_CLIENT_SECRET}"
+  api_url: "https://www.warcraftlogs.com/api/v2/client"
+  oauth_url: "https://www.warcraftlogs.com/oauth/token"
+
+google:
+  service_account_json_path: "./wowbots-471300-d06b31f86814.json"
