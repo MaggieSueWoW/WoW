@@ -10,8 +10,12 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 from sheets_io import (
-    open_sheet, ws_by_name, read_all, rows_to_dicts, upsert_rows,
-    now_pt_iso
+    open_sheet,
+    ws_by_name,
+    read_all,
+    rows_to_dicts,
+    upsert_rows,
+    now_pt_iso,
 )
 
 # ---------- Logging ----------
@@ -22,18 +26,29 @@ logging.basicConfig(
 )
 LOG = logging.getLogger("sprint3")
 
+
 # ---------- Helpers ----------
 def parse_local_time(s: str) -> time:
     hh, mm = [int(x) for x in s.strip().split(":")]
     return time(hh, mm)
 
+
 def weekday_index(name: str) -> int:
     # Monday=0 ... Sunday=6
     name = (name or "").strip().lower()
-    table = {"monday":0,"tuesday":1,"wednesday":2,"thursday":3,"friday":4,"saturday":5,"sunday":6}
+    table = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
     if name not in table:
         raise ValueError(f"Invalid day: {name}")
     return table[name]
+
 
 def safe_float(x: Any, default: float = 0.0) -> float:
     try:
@@ -41,13 +56,17 @@ def safe_float(x: Any, default: float = 0.0) -> float:
     except Exception:
         return default
 
+
 def dt_from_night_id(nid: str, tz: str) -> datetime:
     # Night ID is "YYYY-MM-DD" in PT by construction (Sprint 2)
     d = date.fromisoformat(nid)
     # use 20:00 local to avoid any edge with week boundary at 07:00
     return datetime(d.year, d.month, d.day, 20, 0, tzinfo=ZoneInfo(tz))
 
-def week_anchor_for_dt(local_dt: datetime, tz: str, anchor_day: str, anchor_time: str) -> date:
+
+def week_anchor_for_dt(
+    local_dt: datetime, tz: str, anchor_day: str, anchor_time: str
+) -> date:
     """
     Returns the date (YYYY-MM-DD) of the most recent 'anchor_day' at 'anchor_time' local,
     whose datetime is <= local_dt.
@@ -58,10 +77,13 @@ def week_anchor_for_dt(local_dt: datetime, tz: str, anchor_day: str, anchor_time
     base = local_dt
     # Move back to the weekday
     days_back = (base.weekday() - target_wd) % 7
-    candidate = datetime(base.year, base.month, base.day, t.hour, t.minute, tzinfo=base.tzinfo) - timedelta(days=days_back)
+    candidate = datetime(
+        base.year, base.month, base.day, t.hour, t.minute, tzinfo=base.tzinfo
+    ) - timedelta(days=days_back)
     if local_dt < candidate:
         candidate -= timedelta(days=7)
     return candidate.date()
+
 
 # ---------- Data classes ----------
 @dataclass
@@ -69,6 +91,7 @@ class NightTotal:
     night_id: str
     main: str
     minutes_total: float
+
 
 # ---------- Sprint 3 main ----------
 def main():
@@ -85,16 +108,16 @@ def main():
     sheet_id = cfg["app"]["sheet_id"]
     sheets_cfg = cfg["app"]["sheets"]
 
-    week_anchor_day = cfg["app"]["week_reset"]["day_of_week"]         # e.g., "Tuesday"
-    week_anchor_time = cfg["app"]["week_reset"]["time_local"]          # e.g., "07:00"
+    week_anchor_day = cfg["app"]["week_reset"]["day_of_week"]  # e.g., "Tuesday"
+    week_anchor_time = cfg["app"]["week_reset"]["time_local"]  # e.g., "07:00"
 
     ss = open_sheet(cfg["google"]["service_account_json_path"], sheet_id)
 
-    ws_control   = ws_by_name(ss, sheets_cfg["control"])
-    ws_roster    = ws_by_name(ss, sheets_cfg["roster_map"])
-    ws_ntotals   = ws_by_name(ss, sheets_cfg["night_totals"])
-    ws_wtotals   = ws_by_name(ss, sheets_cfg["week_totals"])
-    ws_service   = ws_by_name(ss, sheets_cfg["service_log"])
+    ws_control = ws_by_name(ss, sheets_cfg["control"])
+    ws_roster = ws_by_name(ss, sheets_cfg["roster_map"])
+    ws_ntotals = ws_by_name(ss, sheets_cfg["night_totals"])
+    ws_wtotals = ws_by_name(ss, sheets_cfg["week_totals"])
+    ws_service = ws_by_name(ss, sheets_cfg["service_log"])
 
     # --- Load Roster Map (optional Role lookup) ---
     rm_headers, rm_rows = read_all(ws_roster)
@@ -164,15 +187,17 @@ def main():
 
         rank = 1
         for m, week_min, s2d in entries:
-            week_rows.append({
-                "Game Week (Tuesday PT)": wk.isoformat(),
-                "Main": m,
-                "Minutes (Week)": f"{week_min:.2f}",
-                "Minutes (Season-to-date)": f"{s2d:.2f}",
-                "Rank (Least time first)": str(rank),
-                "Role": main_role.get(m, ""),
-                "Nights Count": "1",  # keep simple for 1-night team; adjust later if you add nights
-            })
+            week_rows.append(
+                {
+                    "Game Week (Tuesday PT)": wk.isoformat(),
+                    "Main": m,
+                    "Minutes (Week)": f"{week_min:.2f}",
+                    "Minutes (Season-to-date)": f"{s2d:.2f}",
+                    "Rank (Least time first)": str(rank),
+                    "Role": main_role.get(m, ""),
+                    "Nights Count": "1",  # keep simple for 1-night team; adjust later if you add nights
+                }
+            )
             rank += 1
 
     # --- UPSERT into Week Totals ---
@@ -181,21 +206,28 @@ def main():
         raise RuntimeError("Week Totals sheet missing headers.")
 
     ins_w, upd_w = upsert_rows(
-        ws_wtotals,
-        wt_headers,
-        week_rows,
-        ["Game Week (Tuesday PT)", "Main"]
+        ws_wtotals, wt_headers, week_rows, ["Game Week (Tuesday PT)", "Main"]
     )
     LOG.info("Week Totals upserts: +%d / updated %d", ins_w, upd_w)
 
     # --- Service log ---
     log(ws_service, tz, "", "", "ROLLUP", f"WeekTotals +{ins_w}/{upd_w}")
 
-def log(ws_service, tz: str, report_code: str, night_id: str, stage: str, message: str, details: Dict[str, Any] | None = None):
+
+def log(
+    ws_service,
+    tz: str,
+    report_code: str,
+    night_id: str,
+    stage: str,
+    message: str,
+    details: Dict[str, Any] | None = None,
+):
     headers, _ = read_all(ws_service)
     if not headers:
         return
     from sheets_io import now_pt_iso  # avoid re-import at top just for clarity
+
     row = {
         "Timestamp (PT)": now_pt_iso(tz),
         "Level": "info",
@@ -205,7 +237,10 @@ def log(ws_service, tz: str, report_code: str, night_id: str, stage: str, messag
         "Message": message,
         "Details JSON": "{}",
     }
-    ws_service.append_row([row.get(h, "") for h in headers], value_input_option="USER_ENTERED")
+    ws_service.append_row(
+        [row.get(h, "") for h in headers], value_input_option="USER_ENTERED"
+    )
+
 
 if __name__ == "__main__":
     main()

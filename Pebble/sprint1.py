@@ -9,12 +9,17 @@ from typing import Dict, Any, List
 
 from dotenv import load_dotenv
 
-from wcl_client import (
-    extract_report_code, get_token, fetch_report, stable_digest
-)
+from wcl_client import extract_report_code, get_token, fetch_report, stable_digest
 from sheets_io import (
-    open_sheet, ws_by_name, read_all, rows_to_dicts,
-    upsert_rows, now_pt_iso, ms_to_pt_iso, to_int, col_letter
+    open_sheet,
+    ws_by_name,
+    read_all,
+    rows_to_dicts,
+    upsert_rows,
+    now_pt_iso,
+    ms_to_pt_iso,
+    to_int,
+    col_letter,
 )
 
 # ---------- Logging ----------
@@ -25,7 +30,8 @@ logging.basicConfig(
 )
 LOG = logging.getLogger("runner")
 
-def boolish(val: str, default: bool=False) -> bool:
+
+def boolish(val: str, default: bool = False) -> bool:
     s = (val or "").strip().lower()
     if s in ("true", "t", "yes", "y", "1"):
         return True
@@ -33,10 +39,12 @@ def boolish(val: str, default: bool=False) -> bool:
         return False
     return default
 
+
 def make_character(name: str, server: str) -> str:
     if not name:
         return ""
     return f"{name}-{server}" if server else name
+
 
 def main():
     if len(sys.argv) < 2:
@@ -69,7 +77,13 @@ def main():
         c_headers, c_rows = read_all(ws_control)
         ctrl = rows_to_dicts(c_headers, c_rows)
         kv = {row["Key"]: (row.get("Value") or "") for row in ctrl if "Key" in row}
-        auto_mark_done = (kv.get("Auto Mark Done","").strip().lower() in ("true","t","yes","y","1"))
+        auto_mark_done = kv.get("Auto Mark Done", "").strip().lower() in (
+            "true",
+            "t",
+            "yes",
+            "y",
+            "1",
+        )
     except Exception:
         pass
 
@@ -99,10 +113,24 @@ def main():
         try:
             rep = fetch_report(token, code)
         except Exception as e:
-            log(ws_service, tz, code, r.get("Raid Night ID (override)", ""), "FETCH", f"Error fetching: {e}")
+            log(
+                ws_service,
+                tz,
+                code,
+                r.get("Raid Night ID (override)", ""),
+                "FETCH",
+                f"Error fetching: {e}",
+            )
             continue
         if rep is None:
-            log(ws_service, tz, code, r.get("Raid Night ID (override)", ""), "FETCH", "No report returned")
+            log(
+                ws_service,
+                tz,
+                code,
+                r.get("Raid Night ID (override)", ""),
+                "FETCH",
+                "No report returned",
+            )
             continue
 
         report_start = int(rep.get("startTime") or 0)
@@ -114,23 +142,52 @@ def main():
 
         # build digests for change detection
         fights_digest_list = [
-            {"id": int(f["id"]), "s": report_start + int(f["startTime"]), "e": report_start + int(f["endTime"])} for f
-            in fights]
-        computed_change_hash = stable_digest({"F": fights_digest_list, "P_count": sum(
-            1 for f in fights if int(f.get("difficulty") or 0) == 5 and int(f.get("encounterID") or 0) > 0)})
+            {
+                "id": int(f["id"]),
+                "s": report_start + int(f["startTime"]),
+                "e": report_start + int(f["endTime"]),
+            }
+            for f in fights
+        ]
+        computed_change_hash = stable_digest(
+            {
+                "F": fights_digest_list,
+                "P_count": sum(
+                    1
+                    for f in fights
+                    if int(f.get("difficulty") or 0) == 5
+                    and int(f.get("encounterID") or 0) > 0
+                ),
+            }
+        )
 
         # If Last Change Hash matches and we already have Report Code set, skip all writes for this row
         existing_lch = (r.get("Last Change Hash") or "").strip()
         if existing_lch and existing_lch == computed_change_hash:
             # Optionally auto-mark done if report_end > 0 and the switch is on
             if auto_mark_done and report_end and status != "done":
-                r2 = dict(r);
+                r2 = dict(r)
                 r2["Status"] = "done"
-                write_back_reports_row(ws_reports, rep_headers, r, r2)  # safe update for status only
-                log(ws_service, tz, code, r.get("Raid Night ID (override)", ""), "STAGE",
-                    "No changes; auto-marked done.")
+                write_back_reports_row(
+                    ws_reports, rep_headers, r, r2
+                )  # safe update for status only
+                log(
+                    ws_service,
+                    tz,
+                    code,
+                    r.get("Raid Night ID (override)", ""),
+                    "STAGE",
+                    "No changes; auto-marked done.",
+                )
             else:
-                log(ws_service, tz, code, r.get("Raid Night ID (override)", ""), "STAGE", "No changes; skipped writes.")
+                log(
+                    ws_service,
+                    tz,
+                    code,
+                    r.get("Raid Night ID (override)", ""),
+                    "STAGE",
+                    "No changes; skipped writes.",
+                )
             if sleep_ms > 0:
                 time.sleep(sleep_ms / 1000.0)
             continue
@@ -149,25 +206,31 @@ def main():
             abs_start = report_start + rel_s
             abs_end = report_start + rel_e
 
-            fights_rows.append({
-                "Fight Key": f"{code}:{fight_id}",
-                "Report Code": code,
-                "Fight ID (in report)": str(fight_id),
-                "Night ID": "",
-                "Encounter Name": f.get("name") or "",
-                "Encounter ID": str(f.get("encounterID") or 0),
-                "Difficulty": str(f.get("difficulty") or ""),
-                "Is Mythic": "TRUE" if int(f.get("difficulty") or 0) == 5 else "FALSE",
-                "Is Trash": "TRUE" if int(f.get("encounterID") or 0) == 0 else "FALSE",
-                "Start (UTC ms)": str(abs_start),
-                "End (UTC ms)": str(abs_end),
-                "Start (PT)": ms_to_pt_iso(abs_start, tz),
-                "End (PT)": ms_to_pt_iso(abs_end, tz),
-                "Duration (sec)": str(max(0, (abs_end - abs_start) // 1000)),
-                "Within Raid Window": "",
-                "Mythic Block ID": "",
-                "Break Gap Member": "",
-            })
+            fights_rows.append(
+                {
+                    "Fight Key": f"{code}:{fight_id}",
+                    "Report Code": code,
+                    "Fight ID (in report)": str(fight_id),
+                    "Night ID": "",
+                    "Encounter Name": f.get("name") or "",
+                    "Encounter ID": str(f.get("encounterID") or 0),
+                    "Difficulty": str(f.get("difficulty") or ""),
+                    "Is Mythic": (
+                        "TRUE" if int(f.get("difficulty") or 0) == 5 else "FALSE"
+                    ),
+                    "Is Trash": (
+                        "TRUE" if int(f.get("encounterID") or 0) == 0 else "FALSE"
+                    ),
+                    "Start (UTC ms)": str(abs_start),
+                    "End (UTC ms)": str(abs_end),
+                    "Start (PT)": ms_to_pt_iso(abs_start, tz),
+                    "End (PT)": ms_to_pt_iso(abs_end, tz),
+                    "Duration (sec)": str(max(0, (abs_end - abs_start) // 1000)),
+                    "Within Raid Window": "",
+                    "Mythic Block ID": "",
+                    "Break Gap Member": "",
+                }
+            )
             fights_digest_list.append({"id": fight_id, "s": abs_start, "e": abs_end})
 
         # PARTICIPATION rows — **Mythic boss fights only** to keep size small
@@ -185,36 +248,47 @@ def main():
             start_pt = ms_to_pt_iso(abs_start, tz)
             end_pt = ms_to_pt_iso(abs_end, tz)
 
-            for aid in (f.get("friendlyPlayers") or []):
+            for aid in f.get("friendlyPlayers") or []:
                 a = actor_map.get(int(aid))
                 if not a:
                     continue
                 char = make_character(a.get("name") or "", a.get("server") or "")
-                part_rows.append({
-                    "Fight Key": f"{code}:{fight_id}",
-                    "Report Code": code,
-                    "Fight ID (in report)": str(fight_id),
-                    "Actor ID": str(aid),
-                    "Character (Name-Realm)": char,
-                    "Main": char,                # Roster map comes in Sprint 2
-                    "Class": a.get("subType") or "",
-                    "Spec": "",
-                    "Role": "",
-                    "In Mythic": "TRUE",
-                    "Count Toward Trash": "FALSE",
-                    "Start (PT)": start_pt,
-                    "End (PT)": end_pt,
-                    "Duration (sec)": str(dur),
-                })
+                part_rows.append(
+                    {
+                        "Fight Key": f"{code}:{fight_id}",
+                        "Report Code": code,
+                        "Fight ID (in report)": str(fight_id),
+                        "Actor ID": str(aid),
+                        "Character (Name-Realm)": char,
+                        "Main": char,  # Roster map comes in Sprint 2
+                        "Class": a.get("subType") or "",
+                        "Spec": "",
+                        "Role": "",
+                        "In Mythic": "TRUE",
+                        "Count Toward Trash": "FALSE",
+                        "Start (PT)": start_pt,
+                        "End (PT)": end_pt,
+                        "Duration (sec)": str(dur),
+                    }
+                )
 
         # Upserts
         f_headers, _ = read_all(ws_fights)
         p_headers, _ = read_all(ws_part)
         if not f_headers or not p_headers:
-            raise RuntimeError("Fights/Participation sheets missing headers. Paste them first.")
+            raise RuntimeError(
+                "Fights/Participation sheets missing headers. Paste them first."
+            )
 
-        ins_f, upd_f = upsert_rows(ws_fights, f_headers, fights_rows, ["Report Code", "Fight ID (in report)"])
-        ins_p, upd_p = upsert_rows(ws_part, p_headers, part_rows, ["Report Code", "Fight ID (in report)", "Actor ID"])
+        ins_f, upd_f = upsert_rows(
+            ws_fights, f_headers, fights_rows, ["Report Code", "Fight ID (in report)"]
+        )
+        ins_p, upd_p = upsert_rows(
+            ws_part,
+            p_headers,
+            part_rows,
+            ["Report Code", "Fight ID (in report)", "Actor ID"],
+        )
 
         # Update Reports cache
         reports_updates = {
@@ -226,7 +300,9 @@ def main():
             "Guild": guild_name,
             "Uploader": "",
             "Closed?": "TRUE" if report_end else "FALSE",
-            "Last Processed Fight Index": str(max([int(f["id"]) for f in fights], default=0)),
+            "Last Processed Fight Index": str(
+                max([int(f["id"]) for f in fights], default=0)
+            ),
             "Digest": stable_digest(fights_digest_list),
             "Last Checked (PT)": now_pt_iso(tz),
             "Last Change Hash": computed_change_hash,
@@ -236,8 +312,14 @@ def main():
             reports_updates["Status"] = "done"
 
         write_back_reports_row(ws_reports, rep_headers, r, reports_updates)
-        log(ws_service, tz, code, r.get("Raid Night ID (override)", ""), "STAGE",
-            f"Updated report cache; wrote Fights/Participation diffs.")
+        log(
+            ws_service,
+            tz,
+            code,
+            r.get("Raid Night ID (override)", ""),
+            "STAGE",
+            f"Updated report cache; wrote Fights/Participation diffs.",
+        )
 
         if sleep_ms > 0:
             time.sleep(sleep_ms / 1000.0)
@@ -247,7 +329,10 @@ def main():
     if processed == 0:
         LOG.info("No reports to process (all 'done' or empty).")
 
-def write_back_reports_row(ws, headers: List[str], current_row_dict: Dict[str, str], updates: Dict[str, str]):
+
+def write_back_reports_row(
+    ws, headers: List[str], current_row_dict: Dict[str, str], updates: Dict[str, str]
+):
     all_vals = ws.get_all_values()
     header_index = {h: i for i, h in enumerate(headers)}
     target_row = None
@@ -263,7 +348,9 @@ def write_back_reports_row(ws, headers: List[str], current_row_dict: Dict[str, s
     row_vals = [str(merged.get(h, "")) for h in headers]
 
     if target_row is None:
-        logging.getLogger("sheets").info("Reports: appending new row for URL %s", current_row_dict.get("Report URL"))
+        logging.getLogger("sheets").info(
+            "Reports: appending new row for URL %s", current_row_dict.get("Report URL")
+        )
         ws.append_row(row_vals, value_input_option="USER_ENTERED")
         return
 
@@ -271,7 +358,16 @@ def write_back_reports_row(ws, headers: List[str], current_row_dict: Dict[str, s
     logging.getLogger("sheets").info("Reports: updating row %d", target_row)
     ws.update(rng, [row_vals])
 
-def log(ws_service, tz: str, report_code: str, night_id: str, stage: str, message: str, details: Dict[str, Any] | None = None):
+
+def log(
+    ws_service,
+    tz: str,
+    report_code: str,
+    night_id: str,
+    stage: str,
+    message: str,
+    details: Dict[str, Any] | None = None,
+):
     headers, _ = read_all(ws_service)
     if not headers:
         raise RuntimeError("Service Log sheet missing headers.")
@@ -284,7 +380,10 @@ def log(ws_service, tz: str, report_code: str, night_id: str, stage: str, messag
         "Message": message,
         "Details JSON": json.dumps(details or {}),
     }
-    ws_service.append_row([row.get(h, "") for h in headers], value_input_option="USER_ENTERED")
+    ws_service.append_row(
+        [row.get(h, "") for h in headers], value_input_option="USER_ENTERED"
+    )
+
 
 if __name__ == "__main__":
     main()

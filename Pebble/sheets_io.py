@@ -14,19 +14,24 @@ LOGGER = logging.getLogger("sheets")
 
 # ---------- SHEETS UTILS ----------
 
+
 def open_sheet(service_account_json_path: str, sheet_id: str):
     LOGGER.info("Opening Google Sheet %s", sheet_id)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive.readonly",
     ]
-    creds = Credentials.from_service_account_file(service_account_json_path, scopes=scopes)
+    creds = Credentials.from_service_account_file(
+        service_account_json_path, scopes=scopes
+    )
     gc = gspread.authorize(creds)
     return gc.open_by_key(sheet_id)
+
 
 def ws_by_name(ss, name: str):
     LOGGER.info("Opening worksheet '%s'", name)
     return ss.worksheet(name)
+
 
 def read_all(ws) -> Tuple[List[str], List[List[str]]]:
     vals = ws.get_all_values()
@@ -35,6 +40,7 @@ def read_all(ws) -> Tuple[List[str], List[List[str]]]:
     headers = vals[0]
     rows = vals[1:]
     return headers, rows
+
 
 def rows_to_dicts(headers: List[str], rows: List[List[str]]) -> List[Dict[str, str]]:
     out = []
@@ -45,22 +51,34 @@ def rows_to_dicts(headers: List[str], rows: List[List[str]]) -> List[Dict[str, s
         out.append(d)
     return out
 
+
 def dicts_to_rows(headers: List[str], dicts: List[Dict[str, Any]]) -> List[List[str]]:
     out = []
     for d in dicts:
-        out.append([str(d.get(h, "")) if d.get(h, "") is not None else "" for h in headers])
+        out.append(
+            [str(d.get(h, "")) if d.get(h, "") is not None else "" for h in headers]
+        )
     return out
 
-def build_index(headers: List[str], rows: List[List[str]], key_fields: List[str]) -> Dict[Tuple[str, ...], int]:
+
+def build_index(
+    headers: List[str], rows: List[List[str]], key_fields: List[str]
+) -> Dict[Tuple[str, ...], int]:
     """Return mapping from key tuple -> 1-based row number (including header)."""
     idx = {}
     h2i = {h: i for i, h in enumerate(headers)}
     for ridx, r in enumerate(rows, start=2):
-        key = tuple((r[h2i[k]] if h2i.get(k) is not None and h2i[k] < len(r) else "") for k in key_fields)
+        key = tuple(
+            (r[h2i[k]] if h2i.get(k) is not None and h2i[k] < len(r) else "")
+            for k in key_fields
+        )
         idx[key] = ridx
     return idx
 
-def group_consecutive(updates: List[Tuple[int, List[str]]]) -> List[List[Tuple[int, List[str]]]]:
+
+def group_consecutive(
+    updates: List[Tuple[int, List[str]]],
+) -> List[List[Tuple[int, List[str]]]]:
     """Group (rownum, rowvals) updates into runs of consecutive row numbers."""
     if not updates:
         return []
@@ -76,6 +94,7 @@ def group_consecutive(updates: List[Tuple[int, List[str]]]) -> List[List[Tuple[i
     runs.append(cur)
     return runs
 
+
 def col_letter(n: int) -> str:
     s = ""
     while n > 0:
@@ -83,7 +102,10 @@ def col_letter(n: int) -> str:
         s = chr(65 + r) + s
     return s
 
-def upsert_rows(ws, headers: List[str], new_dicts: List[Dict[str, Any]], key_fields: List[str]) -> Tuple[int, int]:
+
+def upsert_rows(
+    ws, headers: List[str], new_dicts: List[Dict[str, Any]], key_fields: List[str]
+) -> Tuple[int, int]:
     """
     UPSERT rows into `ws`. Returns (insert_count, update_count).
 
@@ -94,13 +116,17 @@ def upsert_rows(ws, headers: List[str], new_dicts: List[Dict[str, Any]], key_fie
     """
     existing_vals = ws.get_all_values()
     if not existing_vals:
-        LOGGER.info("Empty sheet '%s': writing headers and %d rows", ws.title, len(new_dicts))
+        LOGGER.info(
+            "Empty sheet '%s': writing headers and %d rows", ws.title, len(new_dicts)
+        )
         ws.update([headers] + dicts_to_rows(headers, new_dicts))
         return (len(new_dicts), 0)
 
     exist_headers = existing_vals[0]
     if exist_headers != headers:
-        raise ValueError(f"Sheet headers mismatch for {ws.title}.\nExpected: {headers}\nFound:    {exist_headers}")
+        raise ValueError(
+            f"Sheet headers mismatch for {ws.title}.\nExpected: {headers}\nFound:    {exist_headers}"
+        )
 
     existing_rows = existing_vals[1:]
     index = build_index(exist_headers, existing_rows, key_fields)
@@ -149,19 +175,24 @@ def upsert_rows(ws, headers: List[str], new_dicts: List[Dict[str, Any]], key_fie
 
     return (len(inserts), len(updates_by_row))
 
+
 def now_pt_iso(pt_tz: str) -> str:
     tz = ZoneInfo(pt_tz)
     return datetime.now(tz).isoformat(timespec="seconds")
 
+
 def ms_to_pt_iso(ms: int, pt_tz: str) -> str:
     dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone(ZoneInfo(pt_tz))
     return dt.isoformat(timespec="seconds")
+
 
 def to_int(s: Any, default: int = 0) -> int:
     try:
         return int(s)
     except Exception:
         return default
+
+
 def _norm_number_or_keep(s: str) -> str:
     """Normalize numeric strings; leave non-numerics untouched."""
     txt = s.strip()
@@ -177,6 +208,7 @@ def _norm_number_or_keep(s: str) -> str:
     plain = format(d, "f").rstrip("0").rstrip(".")
     return plain or "0"
 
+
 def _norm_bool_text(s: str) -> str:
     """
     Normalize only textual booleans (true/false/yes/no) to TRUE/FALSE.
@@ -188,6 +220,7 @@ def _norm_bool_text(s: str) -> str:
     if low in ("false", "no"):
         return "FALSE"
     return s.strip()
+
 
 def _norm_cell(v: str) -> str:
     """Canonicalize a cell for equality checking: numbers first, then textual booleans."""

@@ -29,26 +29,30 @@ query ReportFightsAndActors($code: String!, $translate: Boolean = true) {
 }
 """
 
+
 def _session() -> requests.Session:
     s = requests.Session()
     retry = Retry(
         total=5,
-        backoff_factor=0.5,              # 0.5, 1.0, 2.0, ...
+        backoff_factor=0.5,  # 0.5, 1.0, 2.0, ...
         status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset({"GET","POST"}),
-        raise_on_status=False,           # we’ll still resp.raise_for_status() ourselves
+        allowed_methods=frozenset({"GET", "POST"}),
+        raise_on_status=False,  # we’ll still resp.raise_for_status() ourselves
     )
     s.mount("https://", HTTPAdapter(max_retries=retry))
-    s.mount("http://",  HTTPAdapter(max_retries=retry))
+    s.mount("http://", HTTPAdapter(max_retries=retry))
     return s
 
+
 _SES = _session()
+
 
 def extract_report_code(url_or_code: str) -> str:
     if not url_or_code:
         return ""
     m = re.search(r"/reports/([A-Za-z0-9]+)", url_or_code)
     return m.group(1) if m else url_or_code.strip()
+
 
 def get_token(client_id: str, client_secret: str) -> str:
     LOGGER.info("Requesting Warcraft Logs OAuth token…")
@@ -62,6 +66,7 @@ def get_token(client_id: str, client_secret: str) -> str:
     tok = resp.json()["access_token"]
     LOGGER.info("Got OAuth token.")
     return tok
+
 
 def gql(token: str, query: str, variables: Dict[str, Any]) -> Dict[str, Any]:
     LOGGER.info("GraphQL request → %s vars=%s", WCL_API_URL, variables)
@@ -79,8 +84,12 @@ def gql(token: str, query: str, variables: Dict[str, Any]) -> Dict[str, Any]:
     LOGGER.info("GraphQL request ok.")
     return data["data"]
 
+
 def fetch_report(token: str, code: str) -> Dict[str, Any]:
-    return gql(token, REPORT_GQL, {"code": code, "translate": True})["reportData"]["report"]
+    return gql(token, REPORT_GQL, {"code": code, "translate": True})["reportData"][
+        "report"
+    ]
+
 
 def stable_digest(obj: Any) -> str:
     raw = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")

@@ -13,8 +13,15 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 from sheets_io import (
-    open_sheet, ws_by_name, read_all, rows_to_dicts, upsert_rows,
-    now_pt_iso, ms_to_pt_iso, to_int, col_letter
+    open_sheet,
+    ws_by_name,
+    read_all,
+    rows_to_dicts,
+    upsert_rows,
+    now_pt_iso,
+    ms_to_pt_iso,
+    to_int,
+    col_letter,
 )
 
 logging.basicConfig(
@@ -23,6 +30,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 LOG = logging.getLogger("sprint2")
+
 
 # helper to format a compact fight timeline like "19:12 Gnarlroot | 19:28 Igira | …"
 def format_timeline(fs: List["Fight"]) -> str:
@@ -33,8 +41,10 @@ def format_timeline(fs: List["Fight"]) -> str:
         items.append(f"{t} {name}")
     return " | ".join(items)
 
+
 def minutes(td) -> float:
     return td.total_seconds() / 60.0
+
 
 @dataclass(frozen=True)
 class Fight:
@@ -51,6 +61,7 @@ class Fight:
     is_trash: bool
     temp_key: str  # "{report_code}:{fight_id}"
 
+
 @dataclass(frozen=True)
 class PartRow:
     fight_key: str
@@ -63,10 +74,12 @@ class PartRow:
     duration_sec: int
     in_mythic: bool
 
+
 def parse_time_local(t: str) -> time:
     # "19:00" -> time(19,0)
     hh, mm = [int(x) for x in t.strip().split(":")]
     return time(hh, mm)
+
 
 def within_window(dt_local: datetime, win_start: time, win_end: time) -> bool:
     t = dt_local.timetz()
@@ -74,6 +87,7 @@ def within_window(dt_local: datetime, win_start: time, win_end: time) -> bool:
     e = win_end
     # assumes start<end on same day (your schedule is 19:00–22:30)
     return (t >= s) and (t <= e)
+
 
 def iso_to_dt_local(s: str, tz: str) -> Optional[datetime]:
     if not s:
@@ -85,6 +99,7 @@ def iso_to_dt_local(s: str, tz: str) -> Optional[datetime]:
         return dt.astimezone(ZoneInfo(tz))
     except Exception:
         return None
+
 
 def main():
     if len(sys.argv) < 2:
@@ -99,24 +114,24 @@ def main():
     tz = cfg["app"]["timezone"]
     sheets_cfg = cfg["app"]["sheets"]
     raid_start_t = parse_time_local(cfg["app"]["raid_window"]["start_local"])
-    raid_end_t   = parse_time_local(cfg["app"]["raid_window"]["end_local"])
+    raid_end_t = parse_time_local(cfg["app"]["raid_window"]["end_local"])
 
     break_start_t = parse_time_local(cfg["app"]["break_window"]["start_local"])
-    break_end_t   = parse_time_local(cfg["app"]["break_window"]["end_local"])
+    break_end_t = parse_time_local(cfg["app"]["break_window"]["end_local"])
     min_break_min = int(cfg["app"]["break_window"]["min_gap_minutes"])
     max_break_min = int(cfg["app"]["break_window"]["max_gap_minutes"])
-    dedupe_tol_s  = int(cfg["app"]["dedupe"]["overlap_merge_tolerance_sec"])
+    dedupe_tol_s = int(cfg["app"]["dedupe"]["overlap_merge_tolerance_sec"])
 
     ss = open_sheet(cfg["google"]["service_account_json_path"], cfg["app"]["sheet_id"])
     ws_reports = ws_by_name(ss, sheets_cfg["reports"])
     ws_control = ws_by_name(ss, sheets_cfg["control"])
-    ws_roster  = ws_by_name(ss, sheets_cfg["roster_map"])
-    ws_fights  = ws_by_name(ss, sheets_cfg["fights"])
-    ws_part    = ws_by_name(ss, sheets_cfg["participation"])
-    ws_blocks  = ws_by_name(ss, sheets_cfg["blocks"])
+    ws_roster = ws_by_name(ss, sheets_cfg["roster_map"])
+    ws_fights = ws_by_name(ss, sheets_cfg["fights"])
+    ws_part = ws_by_name(ss, sheets_cfg["participation"])
+    ws_blocks = ws_by_name(ss, sheets_cfg["blocks"])
     ws_ntotals = ws_by_name(ss, sheets_cfg["night_totals"])
     ws_service = ws_by_name(ss, sheets_cfg["service_log"])
-    ws_qa      = ws_by_name(ss, sheets_cfg["night_qa"])
+    ws_qa = ws_by_name(ss, sheets_cfg["night_qa"])
 
     # --- Load Reports (for manual Night ID overrides, etc.)
     rep_headers, rep_rows = read_all(ws_reports)
@@ -157,26 +172,32 @@ def main():
             fid = int(fr["Fight ID (in report)"])
             enc = int(fr["Encounter ID"])
             diff = int(fr.get("Difficulty") or 0)
-            is_mythic = (diff == 5)
-            is_trash = (enc == 0)
+            is_mythic = diff == 5
+            is_trash = enc == 0
             s_ms = int(fr["Start (UTC ms)"])
             e_ms = int(fr["End (UTC ms)"])
-            s_pt = datetime.fromtimestamp(s_ms/1000, tz=timezone.utc).astimezone(tzinfo)
-            e_pt = datetime.fromtimestamp(e_ms/1000, tz=timezone.utc).astimezone(tzinfo)
-            fights.append(Fight(
-                report_code=code,
-                fight_id=fid,
-                encounter_id=enc,
-                name=fr.get("Encounter Name",""),
-                difficulty=diff,
-                start_ms=s_ms,
-                end_ms=e_ms,
-                start_pt=s_pt,
-                end_pt=e_pt,
-                is_mythic=is_mythic,
-                is_trash=is_trash,
-                temp_key=f"{code}:{fid}",
-            ))
+            s_pt = datetime.fromtimestamp(s_ms / 1000, tz=timezone.utc).astimezone(
+                tzinfo
+            )
+            e_pt = datetime.fromtimestamp(e_ms / 1000, tz=timezone.utc).astimezone(
+                tzinfo
+            )
+            fights.append(
+                Fight(
+                    report_code=code,
+                    fight_id=fid,
+                    encounter_id=enc,
+                    name=fr.get("Encounter Name", ""),
+                    difficulty=diff,
+                    start_ms=s_ms,
+                    end_ms=e_ms,
+                    start_pt=s_pt,
+                    end_pt=e_pt,
+                    is_mythic=is_mythic,
+                    is_trash=is_trash,
+                    temp_key=f"{code}:{fid}",
+                )
+            )
         except Exception as ex:
             LOG.warning("Skipping malformed fight row: %s", ex)
 
@@ -186,21 +207,23 @@ def main():
     parts: List[PartRow] = []
     for pr in parts_raw:
         try:
-            s = iso_to_dt_local(pr.get("Start (PT)",""), tz)
-            e = iso_to_dt_local(pr.get("End (PT)",""), tz)
+            s = iso_to_dt_local(pr.get("Start (PT)", ""), tz)
+            e = iso_to_dt_local(pr.get("End (PT)", ""), tz)
             if not s or not e:
                 continue
-            parts.append(PartRow(
-                fight_key=pr["Fight Key"],
-                report_code=pr["Report Code"],
-                actor_id=int(pr["Actor ID"]),
-                character=pr.get("Character (Name-Realm)",""),
-                main=pr.get("Main","") or pr.get("Character (Name-Realm)",""),
-                start_pt=s,
-                end_pt=e,
-                duration_sec=int(pr.get("Duration (sec)") or 0),
-                in_mythic=(pr.get("In Mythic","").upper() == "TRUE")
-            ))
+            parts.append(
+                PartRow(
+                    fight_key=pr["Fight Key"],
+                    report_code=pr["Report Code"],
+                    actor_id=int(pr["Actor ID"]),
+                    character=pr.get("Character (Name-Realm)", ""),
+                    main=pr.get("Main", "") or pr.get("Character (Name-Realm)", ""),
+                    start_pt=s,
+                    end_pt=e,
+                    duration_sec=int(pr.get("Duration (sec)") or 0),
+                    in_mythic=(pr.get("In Mythic", "").upper() == "TRUE"),
+                )
+            )
         except Exception as ex:
             LOG.warning("Skipping malformed participation row: %s", ex)
 
@@ -213,9 +236,11 @@ def main():
             round(f.end_ms / (dedupe_tol_s * 1000)),
         )
 
-    canon_map: Dict[Tuple[int,int,int], Fight] = {}
+    canon_map: Dict[Tuple[int, int, int], Fight] = {}
     fk_map: Dict[str, str] = {}  # temp_key -> canonical temp_key
-    for f in sorted(fights, key=lambda x: (x.encounter_id, x.start_ms, x.end_ms, x.report_code)):
+    for f in sorted(
+        fights, key=lambda x: (x.encounter_id, x.start_ms, x.end_ms, x.report_code)
+    ):
         ck = canon_key(f)
         if ck not in canon_map:
             canon_map[ck] = f
@@ -256,7 +281,9 @@ def main():
         nights.setdefault(nid, []).append(f)
 
     break_range_by_night: Dict[str, Optional[Tuple[datetime, datetime]]] = {}
-    break_meta_by_night: Dict[str, Dict[str, Any]] = {}  # for QA: detection mode, candidates, largest gap, etc.
+    break_meta_by_night: Dict[str, Dict[str, Any]] = (
+        {}
+    )  # for QA: detection mode, candidates, largest gap, etc.
 
     for nid, fs in nights.items():
         if not fs:
@@ -292,7 +319,9 @@ def main():
             gap_start = prev.end_pt
             gap_end = nxt.start_pt
             gap = gap_end - gap_start
-            if gap < timedelta(minutes=min_break_min) or gap > timedelta(minutes=max_break_min):
+            if gap < timedelta(minutes=min_break_min) or gap > timedelta(
+                minutes=max_break_min
+            ):
                 continue
             mid = gap_start + gap / 2
             if not within_window(mid, break_start_t, break_end_t):
@@ -312,7 +341,8 @@ def main():
                         "start": top[0].isoformat(timespec="seconds"),
                         "end": top[1].isoformat(timespec="seconds"),
                         "minutes": round(top[2], 2),
-                    } for top in top5
+                    }
+                    for top in top5
                 ],
                 "largest_gap_min": round(best[2], 2),
             }
@@ -329,9 +359,11 @@ def main():
     # Participation already tells us which boss fights a player was in.
     # If a player misses one boss in the middle, that splits the block.
     # Map participation to canonical fight order
-    parts_by_night_main: Dict[Tuple[str,str], List[Fight]] = {}
+    parts_by_night_main: Dict[Tuple[str, str], List[Fight]] = {}
     # Build fight order per night for boss fights
-    order_by_night: Dict[str, List[Fight]] = {nid: sorted(fs, key=lambda x: x.start_ms) for nid, fs in nights.items()}
+    order_by_night: Dict[str, List[Fight]] = {
+        nid: sorted(fs, key=lambda x: x.start_ms) for nid, fs in nights.items()
+    }
     idx_by_night_key: Dict[str, Dict[str, int]] = {}
     for nid, fs in order_by_night.items():
         idx_by_night_key[nid] = {f.temp_key: i for i, f in enumerate(fs)}
@@ -353,10 +385,14 @@ def main():
 
     # Build blocks: consecutive indices
     blocks_rows: List[Dict[str, Any]] = []
-    ntotals_acc: Dict[Tuple[str,str], Dict[str, float]] = {}  # (nid, main) -> {"total":sec, "pre":sec, "post":sec}
+    ntotals_acc: Dict[Tuple[str, str], Dict[str, float]] = (
+        {}
+    )  # (nid, main) -> {"total":sec, "pre":sec, "post":sec}
 
     for (nid, main), fs in parts_by_night_main.items():
-        fs_sorted = sorted({f.temp_key: f for f in fs}.values(), key=lambda x: x.start_ms)  # unique & ordered
+        fs_sorted = sorted(
+            {f.temp_key: f for f in fs}.values(), key=lambda x: x.start_ms
+        )  # unique & ordered
         if not fs_sorted:
             continue
         fight_order = order_by_night.get(nid, [])
@@ -368,7 +404,10 @@ def main():
         start_f = fs_sorted[0]
         prev_f = start_f
         for f in fs_sorted[1:]:
-            if index_map.get(f.temp_key, -999) == index_map.get(prev_f.temp_key, -999) + 1:
+            if (
+                index_map.get(f.temp_key, -999)
+                == index_map.get(prev_f.temp_key, -999) + 1
+            ):
                 # still contiguous
                 prev_f = f
                 continue
@@ -381,17 +420,17 @@ def main():
         # Night span (boss-only) used for pre/post split
         night_fs = order_by_night[nid]
         night_start = night_fs[0].start_pt
-        night_end   = night_fs[-1].end_pt
+        night_end = night_fs[-1].end_pt
         br = break_range_by_night.get(nid)
         for idx, (b_start_f, b_end_f) in enumerate(blocks, start=1):
             block_start = b_start_f.start_pt
-            block_end   = b_end_f.end_pt
+            block_end = b_end_f.end_pt
             block_dur = (block_end - block_start).total_seconds()
             # subtract break overlap
             break_overlap = 0.0
             if br:
                 ovl_start = max(block_start, br[0])
-                ovl_end   = min(block_end, br[1])
+                ovl_end = min(block_end, br[1])
                 if ovl_end > ovl_start:
                     break_overlap = (ovl_end - ovl_start).total_seconds()
             credited = max(0.0, block_dur - break_overlap)
@@ -400,8 +439,16 @@ def main():
             pre = 0.0
             post = 0.0
             if br:
-                pre = max(0.0, (min(block_end, br[0]) - block_start).total_seconds()) if block_end > block_start else 0.0
-                post = max(0.0, (block_end - max(block_start, br[1])).total_seconds()) if block_end > block_start else 0.0
+                pre = (
+                    max(0.0, (min(block_end, br[0]) - block_start).total_seconds())
+                    if block_end > block_start
+                    else 0.0
+                )
+                post = (
+                    max(0.0, (block_end - max(block_start, br[1])).total_seconds())
+                    if block_end > block_start
+                    else 0.0
+                )
             else:
                 # no break detected: treat all as total
                 pre = credited
@@ -411,24 +458,26 @@ def main():
             key = (nid, main)
             acc = ntotals_acc.setdefault(key, {"total": 0.0, "pre": 0.0, "post": 0.0})
             acc["total"] += credited
-            acc["pre"]   += pre
-            acc["post"]  += post
+            acc["pre"] += pre
+            acc["post"] += post
 
-            blocks_rows.append({
-                "Night ID": nid,
-                "Main": main,
-                "Character(s) Used": "",  # optional: could fill by scanning parts rows for this block
-                "Block Index": str(idx),
-                "Block Start (PT)": block_start.isoformat(timespec="seconds"),
-                "Block End (PT)":   block_end.isoformat(timespec="seconds"),
-                "Block Duration (sec)": str(int(credited)),
-                "Break Overlap (sec)":  str(int(break_overlap)),
-                "First Fight Key in Block": b_start_f.temp_key,
-                "Last Fight Key in Block":  b_end_f.temp_key,
-                "Mythic Segment ID": "",      # reserved
-                "Include Trash?": "FALSE",
-                "Roster Map Version": "",     # reserved
-            })
+            blocks_rows.append(
+                {
+                    "Night ID": nid,
+                    "Main": main,
+                    "Character(s) Used": "",  # optional: could fill by scanning parts rows for this block
+                    "Block Index": str(idx),
+                    "Block Start (PT)": block_start.isoformat(timespec="seconds"),
+                    "Block End (PT)": block_end.isoformat(timespec="seconds"),
+                    "Block Duration (sec)": str(int(credited)),
+                    "Break Overlap (sec)": str(int(break_overlap)),
+                    "First Fight Key in Block": b_start_f.temp_key,
+                    "Last Fight Key in Block": b_end_f.temp_key,
+                    "Mythic Segment ID": "",  # reserved
+                    "Include Trash?": "FALSE",
+                    "Roster Map Version": "",  # reserved
+                }
+            )
 
     # --- Write Blocks (UPSERT by Night ID + Main + First/Last fight keys) ---
     b_headers, _ = read_all(ws_blocks)
@@ -436,8 +485,10 @@ def main():
         raise RuntimeError("Blocks sheet missing headers.")
 
     ins_b, upd_b = upsert_rows(
-        ws_blocks, b_headers, blocks_rows,
-        ["Night ID", "Main", "First Fight Key in Block", "Last Fight Key in Block"]
+        ws_blocks,
+        b_headers,
+        blocks_rows,
+        ["Night ID", "Main", "First Fight Key in Block", "Last Fight Key in Block"],
     )
     LOG.info("Blocks upserts: +%d / updated %d", ins_b, upd_b)
 
@@ -450,7 +501,9 @@ def main():
             night_start = fs_sorted[0].start_pt if fs_sorted else None
             night_end = fs_sorted[-1].end_pt if fs_sorted else None
             br = break_range_by_night.get(nid)
-            meta = break_meta_by_night.get(nid, {"detection": "none", "candidates": [], "largest_gap_min": 0.0})
+            meta = break_meta_by_night.get(
+                nid, {"detection": "none", "candidates": [], "largest_gap_min": 0.0}
+            )
 
             def secs_to_mins(td):
                 return td.total_seconds() / 60.0
@@ -466,27 +519,35 @@ def main():
                     pre_minutes = max(0.0, secs_to_mins(night_end - night_start))
                     post_minutes = 0.0
 
-            qa_rows.append({
-                "Night ID": nid,
-                "Reports Involved": ", ".join(reports_involved),
-                "Mythic Boss Fights": str(len(fs_sorted)),
-                "Night Start (PT)": night_start.isoformat(timespec="seconds") if night_start else "",
-                "Night End (PT)": night_end.isoformat(timespec="seconds") if night_end else "",
-                "Break Detection": meta["detection"],
-                "Break Start (PT)": br[0].isoformat(timespec="seconds") if br else "",
-                "Break End (PT)": br[1].isoformat(timespec="seconds") if br else "",
-                "Break Duration (min)": f"{round(secs_to_mins(br[1] - br[0]), 2) if br else 0.0}",
-                "Night Pre Duration (min)": f"{pre_minutes:.2f}",
-                "Night Post Duration (min)": f"{post_minutes:.2f}",
-                "Gap Window": f"{break_start_t.strftime('%H:%M')}–{break_end_t.strftime('%H:%M')} PT",
-                "Min Break Gap (min)": str(min_break_min),
-                "Max Break Gap (min)": str(max_break_min),
-                "Dedupe Tolerance (sec)": str(dedupe_tol_s),
-                "Largest Gap (min)": f"{meta['largest_gap_min']:.2f}",
-                "Candidate Gaps (JSON)": json.dumps(meta.get("candidates", [])),
-                "Fight Timeline (compact)": format_timeline(fs_sorted),
-                "Notes": "",
-            })
+            qa_rows.append(
+                {
+                    "Night ID": nid,
+                    "Reports Involved": ", ".join(reports_involved),
+                    "Mythic Boss Fights": str(len(fs_sorted)),
+                    "Night Start (PT)": (
+                        night_start.isoformat(timespec="seconds") if night_start else ""
+                    ),
+                    "Night End (PT)": (
+                        night_end.isoformat(timespec="seconds") if night_end else ""
+                    ),
+                    "Break Detection": meta["detection"],
+                    "Break Start (PT)": (
+                        br[0].isoformat(timespec="seconds") if br else ""
+                    ),
+                    "Break End (PT)": br[1].isoformat(timespec="seconds") if br else "",
+                    "Break Duration (min)": f"{round(secs_to_mins(br[1] - br[0]), 2) if br else 0.0}",
+                    "Night Pre Duration (min)": f"{pre_minutes:.2f}",
+                    "Night Post Duration (min)": f"{post_minutes:.2f}",
+                    "Gap Window": f"{break_start_t.strftime('%H:%M')}–{break_end_t.strftime('%H:%M')} PT",
+                    "Min Break Gap (min)": str(min_break_min),
+                    "Max Break Gap (min)": str(max_break_min),
+                    "Dedupe Tolerance (sec)": str(dedupe_tol_s),
+                    "Largest Gap (min)": f"{meta['largest_gap_min']:.2f}",
+                    "Candidate Gaps (JSON)": json.dumps(meta.get("candidates", [])),
+                    "Fight Timeline (compact)": format_timeline(fs_sorted),
+                    "Notes": "",
+                }
+            )
 
         qa_headers, _ = read_all(ws_qa)
         if not qa_headers:
@@ -497,31 +558,47 @@ def main():
     # --- Night Totals ---
     nt_rows: List[Dict[str, Any]] = []
     for (nid, main), acc in ntotals_acc.items():
-        nt_rows.append({
-            "Night ID": nid,
-            "Main": main,
-            "Minutes (Total)": f"{acc['total']/60:.2f}",
-            "Minutes Pre-Break": f"{acc['pre']/60:.2f}",
-            "Minutes Post-Break": f"{acc['post']/60:.2f}",
-            "Blocks Count": "",              # could compute len(blocks) per (nid, main) if you keep that mapping
-            "Character(s) Used": "",
-            "Notes": "",
-        })
+        nt_rows.append(
+            {
+                "Night ID": nid,
+                "Main": main,
+                "Minutes (Total)": f"{acc['total']/60:.2f}",
+                "Minutes Pre-Break": f"{acc['pre']/60:.2f}",
+                "Minutes Post-Break": f"{acc['post']/60:.2f}",
+                "Blocks Count": "",  # could compute len(blocks) per (nid, main) if you keep that mapping
+                "Character(s) Used": "",
+                "Notes": "",
+            }
+        )
 
     nt_headers, _ = read_all(ws_ntotals)
     if not nt_headers:
         raise RuntimeError("Night Totals sheet missing headers.")
 
-    ins_n, upd_n = upsert_rows(
-        ws_ntotals, nt_headers, nt_rows,
-        ["Night ID", "Main"]
-    )
+    ins_n, upd_n = upsert_rows(ws_ntotals, nt_headers, nt_rows, ["Night ID", "Main"])
     LOG.info("Night Totals upserts: +%d / updated %d", ins_n, upd_n)
 
     # Log success
-    log(ws_service, tz, "", "", "BLOCKS", f"Blocks +{ins_b}/{upd_b}; NightTotals +{ins_n}/{upd_n}" + (f"; QA +{ins_q}/{upd_q}" if ws_qa is not None else ""))
+    log(
+        ws_service,
+        tz,
+        "",
+        "",
+        "BLOCKS",
+        f"Blocks +{ins_b}/{upd_b}; NightTotals +{ins_n}/{upd_n}"
+        + (f"; QA +{ins_q}/{upd_q}" if ws_qa is not None else ""),
+    )
 
-def log(ws_service, tz: str, report_code: str, night_id: str, stage: str, message: str, details: Dict[str, Any] | None = None):
+
+def log(
+    ws_service,
+    tz: str,
+    report_code: str,
+    night_id: str,
+    stage: str,
+    message: str,
+    details: Dict[str, Any] | None = None,
+):
     headers, _ = read_all(ws_service)
     if not headers:
         return
@@ -534,7 +611,10 @@ def log(ws_service, tz: str, report_code: str, night_id: str, stage: str, messag
         "Message": message,
         "Details JSON": json.dumps(details or {}),
     }
-    ws_service.append_row([row.get(h, "") for h in headers], value_input_option="USER_ENTERED")
+    ws_service.append_row(
+        [row.get(h, "") for h in headers], value_input_option="USER_ENTERED"
+    )
+
 
 if __name__ == "__main__":
     main()
