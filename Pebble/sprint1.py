@@ -205,6 +205,16 @@ def main():
             rel_e = int(f["endTime"])
             abs_start = report_start + rel_s
             abs_end = report_start + rel_e
+            roster_ids = list(map(int, (f.get("friendlyPlayers") or [])))
+            roster_chars = []
+            for aid in roster_ids:
+                a = actor_map.get(aid)
+                if not a:
+                    continue
+                char = make_character(a.get("name") or "", a.get("server") or "")
+                if char:
+                    roster_chars.append(char)
+            roster_chars_csv = ", ".join(sorted(set(roster_chars)))
 
             fights_rows.append(
                 {
@@ -229,6 +239,8 @@ def main():
                     "Within Raid Window": "",
                     "Mythic Block ID": "",
                     "Break Gap Member": "",
+                    "Roster (Actor IDs JSON)": json.dumps(roster_ids),
+                    "Roster (Characters CSV)": roster_chars_csv,
                 }
             )
             fights_digest_list.append({"id": fight_id, "s": abs_start, "e": abs_end})

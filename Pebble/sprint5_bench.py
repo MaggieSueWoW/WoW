@@ -106,6 +106,7 @@ def main():
     ws_bnight = ws_by_name(ss, sheets.get("bench_night_totals", "Bench Night Totals"))
     ws_bweek = ws_by_name(ss, sheets.get("bench_week_totals", "Bench Week Totals"))
     ws_service = ws_by_name(ss, sheets.get("service_log", "Service Log"))
+    ws_fights = ws_by_name(ss, sheets.get("fights", "Fights"))
 
     # --- Load Night Totals ---
     nt_headers, nt_rows = read_all(ws_ntotals)
@@ -140,9 +141,15 @@ def main():
         nid = (r.get("Night ID") or "").strip()
         if not nid:
             continue
-        pre = safe_float(r.get("Night Pre Duration (min)"), 0.0)
-        post = safe_float(r.get("Night Post Duration (min)"), 0.0)
-        night_dur[nid] = {"pre": pre, "post": post, "total": pre + post}
+        m_pre = safe_float(r.get("Mythic Pre Duration (min)"), float("nan"))
+        m_post = safe_float(r.get("Mythic Post Duration (min)"), float("nan"))
+        if not (m_pre != m_pre or m_post != m_post):  # NaN check
+            night_dur[nid] = {"pre": m_pre, "post": m_post, "total": m_pre + m_post}
+        else:
+            # fallback to Night (all-boss) if mythic fields missing (backward compatible)
+            pre = safe_float(r.get("Night Pre Duration (min)"), 0.0)
+            post = safe_float(r.get("Night Post Duration (min)"), 0.0)
+            night_dur[nid] = {"pre": pre, "post": post, "total": pre + post}
 
     # --- Load Team Roster (membership windows) ---
     team_headers, team_rows = read_all(ws_team)
@@ -194,6 +201,85 @@ def main():
         role = (rr.get("Role") or "").strip()
         if main and role:
             main_role[main] = role
+    char_to_main: Dict[str, str] = {}
+    for rr in roster:
+        ch = (rr.get("Character (Name-Realm)") or "").strip()
+        mn = (rr.get("Main (Name-Realm)") or "").strip()
+        if ch:
+            char_to_main[ch] = mn if mn else ch
+
+    # Build map: Night ID -> (first mythic start PT, reports involved)
+    qa_by_nid: Dict[str, Dict[str, Any]] = {}
+    for r in qa:
+        nid = (r.get("Night ID") or "").strip()
+        if not nid:
+            continue
+        first_mythic_iso = (r.get("Mythic Start (PT)") or "").strip()
+        qa_by_nid[nid] = {
+            "night_start_pt": (
+                first_mythic_iso or r.get("Night Start (PT)") or ""
+            ).strip(),
+            "reports": [
+                x.strip()
+                for x in (r.get("Reports Involved") or "").split(",")
+                if x.strip()
+            ],
+        }
+
+    # Load fights table once
+    f_headers, f_rows = read_all(ws_fights)
+    fights_tbl = rows_to_dicts(f_headers, f_rows)
+
+    def iso_to_dt_local(s: str, tz: str) -> Optional[datetime]:
+        if not s:
+            return None
+        try:
+            dt = datetime.fromisoformat(s)
+            return dt if dt.tzinfo else dt.replace(tzinfo=ZoneInfo(tz))
+        except Exception:
+            return None
+
+    # For each night, find the last Heroic boss (difficulty==4, encounter>0) that ends <= first Mythic start
+    last_heroic_roster_mains: Dict[str, set[str]] = {}
+    for nid, meta in qa_by_nid.items():
+        start_iso = meta["night_start_pt"]
+        night_start_dt = iso_to_dt_local(start_iso, tz)
+        if not night_start_dt:
+            continue
+        night_start_ms = int(night_start_dt.timestamp() * 1000)
+        reports = set(meta["reports"])
+
+        # filter candidate heroic fights
+        candidates = []
+        for fr in fights_tbl:
+            try:
+                if (fr.get("Report Code") or "") not in reports:
+                    continue
+                if int(fr.get("Difficulty") or 0) != 4:  # Heroic only
+                    continue
+                if int(fr.get("Encounter ID") or 0) <= 0:
+                    continue
+                end_ms = int(fr.get("End (UTC ms)") or 0)
+                if end_ms <= night_start_ms:
+                    candidates.append(fr)
+            except Exception:
+                continue
+
+        if not candidates:
+            continue
+
+        # pick the latest one
+        last = max(candidates, key=lambda x: int(x.get("End (UTC ms)") or 0))
+
+        # read roster characters and map to mains
+        chars_csv = last.get("Roster (Characters CSV)") or ""
+        if not chars_csv.strip():
+            continue  # column not present or empty → skip
+        mains = set()
+        for ch in [c.strip() for c in chars_csv.split(",") if c.strip()]:
+            mains.add(char_to_main.get(ch, ch))
+        if mains:
+            last_heroic_roster_mains[nid] = mains
 
     # --- Compute Bench Night Totals ---
     bnight_rows: List[Dict[str, Any]] = []
@@ -235,6 +321,9 @@ def main():
         avail_post = played_post > 0.0
         status_src = "inferred"
         default_available = played_tot > 0.0
+        if not default_available:
+            if main in last_heroic_roster_mains.get(nid, set()):
+                default_available = True
 
         if default_available:
             # If they only played one half, default the other half to available (charged bench)

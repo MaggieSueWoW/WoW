@@ -229,9 +229,10 @@ def main():
 
     # --- Canonicalize fights (in-memory dedupe across overlapping logs)
     # Key = (encounter_id, round(start_ms/tol), round(end_ms/tol))
-    def canon_key(f: Fight) -> Tuple[int, int, int]:
+    def canon_key(f: Fight) -> Tuple[int, int, int, int]:
         return (
             f.encounter_id,
+            f.difficulty,  # <— added
             round(f.start_ms / (dedupe_tol_s * 1000)),
             round(f.end_ms / (dedupe_tol_s * 1000)),
         )
@@ -270,22 +271,31 @@ def main():
                     night_id = local_date.isoformat()
         night_of_fight[f.temp_key] = night_id
 
-    # --- Break detection per Night ID (auto; allow per-report manual override)
-    # We'll detect break using *mythic boss fights* only.
-    # If multiple reports share a night, we combine all canonical fights for that night.
-    nights: Dict[str, List[Fight]] = {}
+    # Partition into night timelines
+    all_boss_by_night: Dict[str, List[Fight]] = {}
+    mythic_boss_by_night: Dict[str, List[Fight]] = {}
+
     for fk, f in fight_by_canon.items():
-        if not f.is_mythic or f.is_trash:
-            continue  # boss-only for break detection
+        if f.encounter_id <= 0:
+            continue  # no trash
         nid = night_of_fight[fk]
-        nights.setdefault(nid, []).append(f)
+        # All-Boss = Normal(3) + Heroic(4) + Mythic(5)
+        if f.difficulty in (3, 4, 5):
+            all_boss_by_night.setdefault(nid, []).append(f)
+        # Mythic-Boss only
+        if f.difficulty == 5:
+            mythic_boss_by_night.setdefault(nid, []).append(f)
+
+    # --- Break detection per Night ID (auto; allow per-report manual override)
+    nights_all = {
+        nid: sorted(fs, key=lambda x: x.start_ms)
+        for nid, fs in all_boss_by_night.items()
+    }
 
     break_range_by_night: Dict[str, Optional[Tuple[datetime, datetime]]] = {}
-    break_meta_by_night: Dict[str, Dict[str, Any]] = (
-        {}
-    )  # for QA: detection mode, candidates, largest gap, etc.
+    break_meta_by_night: Dict[str, Dict[str, Any]] = {}
 
-    for nid, fs in nights.items():
+    for nid, fs in nights_all.items():
         if not fs:
             break_range_by_night[nid] = None
             break_meta_by_night[nid] = {
@@ -295,9 +305,7 @@ def main():
             }
             continue
 
-        fs = sorted(fs, key=lambda x: x.start_ms)
-
-        # manual override if any report in the night provided explicit break
+        # manual override if any report in the night provided explicit break (unchanged)
         manual = None
         for f in fs:
             mbs, mbe = manual_breaks.get(f.report_code, (None, None))
@@ -309,15 +317,14 @@ def main():
             break_meta_by_night[nid] = {
                 "detection": "manual",
                 "candidates": [],
-                "largest_gap_min": minutes(manual[1] - manual[0]),
+                "largest_gap_min": round(minutes(manual[1] - manual[0]), 2),
             }
             continue
 
-        # auto: gather all viable gaps
+        # auto: gaps between ALL boss fights
         candidates: List[Tuple[datetime, datetime, float]] = []
         for prev, nxt in zip(fs, fs[1:]):
-            gap_start = prev.end_pt
-            gap_end = nxt.start_pt
+            gap_start, gap_end = prev.end_pt, nxt.start_pt
             gap = gap_end - gap_start
             if gap < timedelta(minutes=min_break_min) or gap > timedelta(
                 minutes=max_break_min
@@ -328,21 +335,19 @@ def main():
                 continue
             candidates.append((gap_start, gap_end, minutes(gap)))
 
-        # choose the largest
         if candidates:
             best = max(candidates, key=lambda x: x[2])
             break_range_by_night[nid] = (best[0], best[1])
-            # keep only the top 5 candidates for QA readability
             top5 = sorted(candidates, key=lambda x: x[2], reverse=True)[:5]
             break_meta_by_night[nid] = {
                 "detection": "auto",
                 "candidates": [
                     {
-                        "start": top[0].isoformat(timespec="seconds"),
-                        "end": top[1].isoformat(timespec="seconds"),
-                        "minutes": round(top[2], 2),
+                        "start": a.isoformat(timespec="seconds"),
+                        "end": b.isoformat(timespec="seconds"),
+                        "minutes": round(m, 2),
                     }
-                    for top in top5
+                    for a, b, m in top5
                 ],
                 "largest_gap_min": round(best[2], 2),
             }
@@ -362,7 +367,7 @@ def main():
     parts_by_night_main: Dict[Tuple[str, str], List[Fight]] = {}
     # Build fight order per night for boss fights
     order_by_night: Dict[str, List[Fight]] = {
-        nid: sorted(fs, key=lambda x: x.start_ms) for nid, fs in nights.items()
+        nid: sorted(fs, key=lambda x: x.start_ms) for nid, fs in nights_all.items()
     }
     idx_by_night_key: Dict[str, Dict[str, int]] = {}
     for nid, fs in order_by_night.items():
@@ -493,61 +498,72 @@ def main():
     LOG.info("Blocks upserts: +%d / updated %d", ins_b, upd_b)
 
     # --- QA sheet
-    qa_rows: List[Dict[str, Any]] = []
     if ws_qa is not None:
-        for nid, fs in nights.items():
-            fs_sorted = sorted(fs, key=lambda x: x.start_ms)
-            reports_involved = sorted({f.report_code for f in fs_sorted})
-            night_start = fs_sorted[0].start_pt if fs_sorted else None
-            night_end = fs_sorted[-1].end_pt if fs_sorted else None
+
+        def span_and_split(
+            fs: List[Fight], br: Optional[Tuple[datetime, datetime]]
+        ) -> Tuple[Optional[datetime], Optional[datetime], float, float]:
+            if not fs:
+                return None, None, 0.0, 0.0
+            s, e = fs[0].start_pt, fs[-1].end_pt
+            if not br:
+                # no break → all goes to "pre" for consistency
+                return s, e, minutes(e - s), 0.0
+            pre = max(0.0, minutes(br[0] - s))
+            post = max(0.0, minutes(e - br[1]))
+            return s, e, pre, post
+
+        qa_rows: List[Dict[str, Any]] = []
+        all_nids = set(all_boss_by_night) | set(mythic_boss_by_night)
+        for nid in sorted(all_nids):
+            all_fs = sorted(all_boss_by_night.get(nid, []), key=lambda x: x.start_ms)
+            myth_fs = sorted(
+                mythic_boss_by_night.get(nid, []), key=lambda x: x.start_ms
+            )
             br = break_range_by_night.get(nid)
-            meta = break_meta_by_night.get(
-                nid, {"detection": "none", "candidates": [], "largest_gap_min": 0.0}
-            )
 
-            def secs_to_mins(td):
-                return td.total_seconds() / 60.0
+            a_start, a_end, a_pre, a_post = span_and_split(all_fs, br)
+            m_start, m_end, m_pre, m_post = span_and_split(myth_fs, br)
 
-            pre_minutes = 0.0
-            post_minutes = 0.0
-            if night_start and night_end:
-                if br:
-                    pre_minutes = max(0.0, secs_to_mins(br[0] - night_start))
-                    post_minutes = max(0.0, secs_to_mins(night_end - br[1]))
-                else:
-                    # no break detected: treat all as "pre" for accounting symmetry
-                    pre_minutes = max(0.0, secs_to_mins(night_end - night_start))
-                    post_minutes = 0.0
-
-            qa_rows.append(
-                {
-                    "Night ID": nid,
-                    "Reports Involved": ", ".join(reports_involved),
-                    "Mythic Boss Fights": str(len(fs_sorted)),
-                    "Night Start (PT)": (
-                        night_start.isoformat(timespec="seconds") if night_start else ""
-                    ),
-                    "Night End (PT)": (
-                        night_end.isoformat(timespec="seconds") if night_end else ""
-                    ),
-                    "Break Detection": meta["detection"],
-                    "Break Start (PT)": (
-                        br[0].isoformat(timespec="seconds") if br else ""
-                    ),
-                    "Break End (PT)": br[1].isoformat(timespec="seconds") if br else "",
-                    "Break Duration (min)": f"{round(secs_to_mins(br[1] - br[0]), 2) if br else 0.0}",
-                    "Night Pre Duration (min)": f"{pre_minutes:.2f}",
-                    "Night Post Duration (min)": f"{post_minutes:.2f}",
-                    "Gap Window": f"{break_start_t.strftime('%H:%M')}–{break_end_t.strftime('%H:%M')} PT",
-                    "Min Break Gap (min)": str(min_break_min),
-                    "Max Break Gap (min)": str(max_break_min),
-                    "Dedupe Tolerance (sec)": str(dedupe_tol_s),
-                    "Largest Gap (min)": f"{meta['largest_gap_min']:.2f}",
-                    "Candidate Gaps (JSON)": json.dumps(meta.get("candidates", [])),
-                    "Fight Timeline (compact)": format_timeline(fs_sorted),
-                    "Notes": "",
-                }
-            )
+            # assemble QA row (still writing Break meta etc. like before)
+            qa_row = {
+                "Night ID": nid,
+                "Reports Involved": ", ".join(sorted({f.report_code for f in all_fs})),
+                "Mythic Boss Fights": str(len(myth_fs)),
+                "Night Start (PT)": (
+                    a_start.isoformat(timespec="seconds") if a_start else ""
+                ),
+                "Night End (PT)": a_end.isoformat(timespec="seconds") if a_end else "",
+                "Break Detection": break_meta_by_night.get(nid, {}).get(
+                    "detection", "none"
+                ),
+                "Break Start (PT)": br[0].isoformat(timespec="seconds") if br else "",
+                "Break End (PT)": br[1].isoformat(timespec="seconds") if br else "",
+                "Break Duration (min)": f"{round(minutes(br[1] - br[0]), 2) if br else 0.0}",
+                "Gap Window": f"{break_start_t.strftime('%H:%M')}–{break_end_t.strftime('%H:%M')} PT",
+                "Min Break Gap (min)": str(min_break_min),
+                "Max Break Gap (min)": str(max_break_min),
+                "Dedupe Tolerance (sec)": str(dedupe_tol_s),
+                "Largest Gap (min)": f"{break_meta_by_night.get(nid, {}).get('largest_gap_min', 0.0):.2f}",
+                "Candidate Gaps (JSON)": json.dumps(
+                    break_meta_by_night.get(nid, {}).get("candidates", [])
+                ),
+                "Fight Timeline (compact)": format_timeline(
+                    all_fs
+                ),  # use ALL-boss timeline for the quick view
+                # NEW mythic-specific timing
+                "Mythic Start (PT)": (
+                    m_start.isoformat(timespec="seconds") if m_start else ""
+                ),
+                "Mythic End (PT)": m_end.isoformat(timespec="seconds") if m_end else "",
+                "Mythic Pre Duration (min)": f"{m_pre:.2f}",
+                "Mythic Post Duration (min)": f"{m_post:.2f}",
+                # (optional keep old pre/post? If you previously added Night Pre/Post Duration (min), keep writing them as all-boss:)
+                "Night Pre Duration (min)": f"{a_pre:.2f}",
+                "Night Post Duration (min)": f"{a_post:.2f}",
+                "Notes": "",
+            }
+            qa_rows.append(qa_row)
 
         qa_headers, _ = read_all(ws_qa)
         if not qa_headers:
