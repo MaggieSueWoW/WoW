@@ -143,13 +143,15 @@ def main():
             continue
         m_pre = safe_float(r.get("Mythic Pre Duration (min)"), float("nan"))
         m_post = safe_float(r.get("Mythic Post Duration (min)"), float("nan"))
-        if not (m_pre != m_pre or m_post != m_post):  # NaN check
+
+        # ONLY use mythic durations for bench math.
+        if (m_pre == m_pre) and (m_post == m_post):  # not NaN
             night_dur[nid] = {"pre": m_pre, "post": m_post, "total": m_pre + m_post}
         else:
-            # fallback to Night (all-boss) if mythic fields missing (backward compatible)
-            pre = safe_float(r.get("Night Pre Duration (min)"), 0.0)
-            post = safe_float(r.get("Night Post Duration (min)"), 0.0)
-            night_dur[nid] = {"pre": pre, "post": post, "total": pre + post}
+            LOG.warning(
+                "Night QA missing Mythic durations for Night ID %s; treating as 0.", nid
+            )
+            night_dur[nid] = {"pre": 0.0, "post": 0.0, "total": 0.0}
 
     # --- Load Team Roster (membership windows) ---
     team_headers, team_rows = read_all(ws_team)
@@ -281,104 +283,132 @@ def main():
         if mains:
             last_heroic_roster_mains[nid] = mains
 
+    # Build a map of mains who played by night (from Night Totals)
+    played_mains_by_night: Dict[str, set[str]] = {}
+    for (nid_p, main_p), _vals in played.items():
+        played_mains_by_night.setdefault(nid_p, set()).add(main_p)
+
+    # For each night, we will consider all mains who either played or were present for the last-heroic-before-mythic roster
+    all_mains_for_night: Dict[str, set[str]] = {}
+    for nid in night_dur.keys():
+        all_mains_for_night[nid] = set()
+        all_mains_for_night[nid].update(played_mains_by_night.get(nid, set()))
+        all_mains_for_night[nid].update(last_heroic_roster_mains.get(nid, set()))
+
+    for nid in sorted(all_mains_for_night.keys()):
+        LOG.info(
+            "Bench calc Night %s: mythic_dur(pre=%.2f, post=%.2f), candidates=%d (played=%d, last_heroic=%d)",
+            nid,
+            night_dur.get(nid, {}).get("pre", 0.0),
+            night_dur.get(nid, {}).get("post", 0.0),
+            len(all_mains_for_night[nid]),
+            len(played_mains_by_night.get(nid, set())),
+            len(last_heroic_roster_mains.get(nid, set())),
+        )
+
     # --- Compute Bench Night Totals ---
     bnight_rows: List[Dict[str, Any]] = []
-    nights_avail_count: Dict[Tuple[str, str], bool] = (
-        {}
-    )  # (nid, main) -> any availability
+    nights_avail_count: Dict[Tuple[str, str], bool] = {}
 
-    for (nid, main), p in played.items():
-        # Membership window checks
-        j = team_join.get(main)
-        l = team_leave.get(main)
-        active = team_active.get(main, True)
-        if j and nid < j:
-            continue
-        if l and nid > l:
-            continue
-        if not active and l and nid >= l:
-            continue
-
-        # Night durations
+    for nid in sorted(all_mains_for_night.keys()):
         nd = night_dur.get(nid)
         if not nd:
-            LOG.warning(
-                "Night QA has no durations for Night ID %s; skipping bench calc for %s",
-                nid,
-                main,
-            )
+            LOG.warning("Night QA has no durations for Night ID %s; skipping all bench rows for this night", nid)
             continue
+
         night_pre = nd["pre"]
         night_post = nd["post"]
 
-        # Defaults from play data
-        played_tot = p["tot"]
-        played_pre = p["pre"]
-        played_post = p["post"]
+        for main in sorted(all_mains_for_night[nid]):
+            # Respect roster membership windows / Active?
+            # (We keep existing membership logic)
+            def within_membership(m: str, night_id: str) -> bool:
+                # reuse team_join/team_leave/team_active computed earlier
+                active = team_active.get(m, True)
+                if not active:
+                    # If inactive and leave date exists, disallow >= leave
+                    lw = team_leave.get(m)
+                    if lw and night_id >= lw:
+                        return False
+                j = team_join.get(m)
+                l = team_leave.get(m)
+                if j and night_id < j:
+                    return False
+                if l and night_id > l:
+                    return False
+                return True
 
-        # Availability inference
-        avail_pre = played_pre > 0.0
-        avail_post = played_post > 0.0
-        status_src = "inferred"
-        default_available = played_tot > 0.0
-        if not default_available:
-            if main in last_heroic_roster_mains.get(nid, set()):
-                default_available = True
+            if not within_membership(main, nid):
+                continue
 
-        if default_available:
-            # If they only played one half, default the other half to available (charged bench)
-            if not avail_pre:
-                avail_pre = True
-            if not avail_post:
-                avail_post = True
+            p = played.get((nid, main), {"tot": 0.0, "pre": 0.0, "post": 0.0})
+            played_tot = p["tot"]
+            played_pre = p["pre"]
+            played_post = p["post"]
 
-        # Apply overrides if any
-        ov_row = overrides.get((nid, main))
-        if ov_row:
-            st = ov_row["status"].lower()
-            pre_flag = ov_row["pre"]
-            post_flag = ov_row["post"]
+            # Default availability
+            # If they played any Mythic that night -> available by halves they actually played.
+            # If they did NOT play any Mythic but WERE in the last-heroic roster -> available for BOTH halves (they sat Mythic).
+            in_last_heroic = main in last_heroic_roster_mains.get(nid, set())
+            status_src = "inferred"
+            if played_tot > 0.0:
+                avail_pre = played_pre > 0.0
+                avail_post = played_post > 0.0
+            else:
+                if in_last_heroic:
+                    avail_pre = True
+                    avail_post = True
+                else:
+                    avail_pre = False
+                    avail_post = False
 
-            if st in ("out", "break"):
-                avail_pre = False
-                avail_post = False
-                status_src = f"override:{'Break' if st=='break' else 'Out'}"
-            elif st == "available":
-                status_src = "override:Available"
+            # Apply explicit overrides
+            ov_row = overrides.get((nid, main))
+            if ov_row:
+                st = ov_row["status"].lower()
+                pre_flag = ov_row["pre"]
+                post_flag = ov_row["post"]
 
-            if pre_flag in ("true", "t", "yes", "y", "1"):
-                avail_pre = True
-            elif pre_flag in ("false", "f", "no", "n", "0"):
-                avail_pre = False
+                if st in ("out", "break"):
+                    avail_pre = False
+                    avail_post = False
+                    status_src = f"override:{'Break' if st == 'break' else 'Out'}"
+                elif st == "available":
+                    status_src = "override:Available"
 
-            if post_flag in ("true", "t", "yes", "y", "1"):
-                avail_post = True
-            elif post_flag in ("false", "f", "no", "n", "0"):
-                avail_post = False
+                if pre_flag in ("true", "t", "yes", "y", "1"):
+                    avail_pre = True
+                elif pre_flag in ("false", "f", "no", "n", "0"):
+                    avail_pre = False
 
-        # Bench amounts
-        bench_pre = max(0.0, night_pre - played_pre) if avail_pre else 0.0
-        bench_post = max(0.0, night_post - played_post) if avail_post else 0.0
-        bench_tot = bench_pre + bench_post
+                if post_flag in ("true", "t", "yes", "y", "1"):
+                    avail_post = True
+                elif post_flag in ("false", "f", "no", "n", "0"):
+                    avail_post = False
 
-        nights_avail_count[(nid, main)] = avail_pre or avail_post
+            # Bench math (Mythic only)
+            bench_pre = max(0.0, night_pre - played_pre) if avail_pre else 0.0
+            bench_post = max(0.0, night_post - played_post) if avail_post else 0.0
+            bench_tot = bench_pre + bench_post
 
-        bnight_rows.append(
-            {
-                "Night ID": nid,
-                "Main": main,
-                "Bench Minutes (Total)": f"{bench_tot:.2f}",
-                "Bench Minutes Pre": f"{bench_pre:.2f}",
-                "Bench Minutes Post": f"{bench_post:.2f}",
-                "Played Minutes (Total)": f"{played_tot:.2f}",
-                "Played Pre": f"{played_pre:.2f}",
-                "Played Post": f"{played_post:.2f}",
-                "Avail Pre?": "TRUE" if avail_pre else "FALSE",
-                "Avail Post?": "TRUE" if avail_post else "FALSE",
-                "Status Source": status_src,
-                "Notes": "",
-            }
-        )
+            nights_avail_count[(nid, main)] = (avail_pre or avail_post)
+
+            bnight_rows.append(
+                {
+                    "Night ID": nid,
+                    "Main": main,
+                    "Bench Minutes (Total)": f"{bench_tot:.2f}",
+                    "Bench Minutes Pre": f"{bench_pre:.2f}",
+                    "Bench Minutes Post": f"{bench_post:.2f}",
+                    "Played Minutes (Total)": f"{played_tot:.2f}",
+                    "Played Pre": f"{played_pre:.2f}",
+                    "Played Post": f"{played_post:.2f}",
+                    "Avail Pre?": "TRUE" if avail_pre else "FALSE",
+                    "Avail Post?": "TRUE" if avail_post else "FALSE",
+                    "Status Source": status_src,
+                    "Notes": "",
+                }
+            )
 
     # Upsert Bench Night Totals (key: Night ID + Main)
     bnh_headers, _ = read_all(ws_bnight)

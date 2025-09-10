@@ -522,8 +522,53 @@ def main():
             )
             br = break_range_by_night.get(nid)
 
+            def mythic_envelope_pre_post(
+                    myth_fs: list,  # List[Fight]
+                    br: tuple | None,  # (break_start_dt, break_end_dt) in PT
+            ) -> tuple:
+                """
+                Compute Mythic envelope and split it by break.
+
+                Returns:
+                  (mythic_start_dt, mythic_end_dt, mythic_pre_minutes, mythic_post_minutes)
+
+                Rules:
+                  - Mythic envelope = [first Mythic pull start, last Mythic pull end]
+                  - Count between-pull downtime as Mythic time
+                  - If there is a break, remove the overlap with the break and attribute the remaining time to pre vs post:
+                      pre  = overlap(M, (-inf, break_start])
+                      post = overlap(M, [break_end, +inf))
+                  - If no break, all time goes to "pre" (for consistency with earlier sheets)
+                """
+                if not myth_fs:
+                    return None, None, 0.0, 0.0
+
+                # Envelope
+                ms = min(f.start_pt for f in myth_fs)
+                me = max(f.end_pt for f in myth_fs)
+
+                def minutes(delta):  # local helper
+                    return max(0.0, delta.total_seconds() / 60.0)
+
+                if not br:
+                    return ms, me, minutes(me - ms), 0.0
+
+                bs, be = br  # break_start, break_end
+
+                # Pre = M ∩ (-inf, bs]
+                pre_min = 0.0
+                if ms < bs:
+                    pre_min = minutes(min(me, bs) - ms)
+
+                # Post = M ∩ [be, +inf)
+                post_min = 0.0
+                if me > be:
+                    post_min = minutes(me - max(ms, be))
+
+                return ms, me, pre_min, post_min
+
             a_start, a_end, a_pre, a_post = span_and_split(all_fs, br)
-            m_start, m_end, m_pre, m_post = span_and_split(myth_fs, br)
+            m_start, m_end, m_pre, m_post = mythic_envelope_pre_post(myth_fs, br)
 
             # assemble QA row (still writing Break meta etc. like before)
             qa_row = {
