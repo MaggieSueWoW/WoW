@@ -1,0 +1,54 @@
+sheets:
+  spreadsheet_id: "YOUR_SHEET_ID"
+  tabs:
+    reports: "Reports"
+    roster_map: "Roster Map"
+    team_roster: "Team Roster"
+    availability_overrides: "Availability Overrides"
+    night_qa: "Night QA"
+    bench_night_totals: "Bench Night Totals"
+    bench_week_totals: "Bench Week Totals"
+    bench_rankings: "Bench Rankings"
+  starts:
+    reports: "B7"
+    roster_map: "B6"
+    team_roster: "B5"
+    availability_overrides: "B9"
+    night_qa: "B5"
+    bench_night_totals: "B5"
+    bench_week_totals: "B5"
+    bench_rankings: "B5"
+  last_processed:
+    reports: "D5"
+    roster_map: "C4"
+    team_roster: "C3"
+    availability_overrides: "C7"
+    night_qa: "C3"
+    bench_night_totals: "C3"
+    bench_week_totals: "C3"
+    bench_rankings: "C3"
+
+time:
+  tz: "America/Los_Angeles"
+  break_window:
+    start_pt: "20:40"  # HH:MM in PT
+    end_pt: "21:40"    # HH:MM in PT
+    min_gap_minutes: 8
+    max_gap_minutes: 45
+
+wcl:
+  client_id: "${WCL_CLIENT_ID}"
+  client_secret: "${WCL_CLIENT_SECRET}"
+  base_url: "https://www.warcraftlogs.com/api/v2/client"
+  token_url: "https://www.warcraftlogs.com/oauth/token"
+
+redis:
+  url: "redis://localhost:6379/0"
+  key_prefix: "pebble:wcl:"
+
+mongo:
+  db: "pebble"
+  write_batch_size: 500
+  uri: "mongodb://localhost:27017"
+
+service_account_json: "./service-account.json"
